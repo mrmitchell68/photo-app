@@ -24,6 +24,7 @@
     <header class="topbar">
       <h1>Photo Studio</h1>
       <div class="spacer"></div>
+      <button class="pill-btn" id="btnHelp" aria-label="Help: Google Drive and phone gallery"><span data-icon="help"></span>Drive help</button>
       <button class="icon-btn" id="btnAISettings" title="AI settings" aria-label="AI settings" data-icon="settings"></button>
     </header>
     <main class="gallery-main">
@@ -33,14 +34,15 @@
         <p>Take one photo or a burst, or import from your gallery. Then edit each one, add stamps and words, and save or share.</p>
         <div class="empty-actions">
           <button class="big-btn primary" data-act="camera"><span data-icon="camera"></span>Take photos</button>
-          <button class="big-btn" data-act="import"><span data-icon="image"></span>Import photos</button>
+          <button class="big-btn" data-act="import"><span data-icon="image"></span>Add photos</button>
+          <p class="note tip">Tip: “Add photos” opens your phone’s picker. To pull from Google Drive, tap Browse / Files there and pick Drive.</p>
         </div>
       </div>
       <div id="grid" class="grid"></div>
     </main>
     <nav class="bottombar">
       <button data-act="camera"><span data-icon="camera"></span>Camera</button>
-      <button data-act="import"><span data-icon="image"></span>Import</button>
+      <button data-act="import" class="add-btn"><span data-icon="plus"></span>Add photos</button>
       <button data-act="saveAll" id="btnSaveAll"><span data-icon="download"></span>Save all</button>
       <button data-act="shareAll" id="btnShareAll"><span data-icon="share"></span>Share all</button>
     </nav>
@@ -85,6 +87,10 @@
       </div>
       <button class="compare-btn" id="btnCompare" aria-label="Hold to compare">Hold to compare</button>
     </div>
+    <div id="aiBar" class="aibar" role="status">
+      <div class="aibar-msg"><span data-icon="sparkle"></span><span id="aiBarText">AI changes applied</span></div>
+      <div class="aibar-btns"><button class="chip primary" id="aiKeep">Keep</button><button class="chip" id="aiUndo">Undo</button><button class="chip" id="aiManual">Edit manually</button></div>
+    </div>
     <div id="objbar" class="objbar">
       <button data-obj="forward"><span data-icon="up"></span>Forward</button>
       <button data-obj="backward"><span data-icon="down"></span>Back</button>
@@ -104,6 +110,25 @@
       <button data-tool="text"><span data-icon="type"></span>Text</button>
       <button data-tool="layers"><span data-icon="layers"></span>Layers</button>
     </nav>
+  </section>
+
+  <!-- PREVIEW & APPROVE -->
+  <section id="preview" class="screen" aria-label="Preview">
+    <header class="topbar">
+      <button class="icon-btn" id="pvBack" aria-label="Back to edit" data-icon="back"></button>
+      <div class="pv-title"><b>Preview</b><span id="pvCount"></span></div>
+      <div class="spacer"></div>
+      <button class="pill-btn" id="pvBefore" aria-pressed="false">Before / After</button>
+    </header>
+    <div id="pvTrack" class="pv-track"></div>
+    <div class="pv-dots" id="pvDots"></div>
+    <div class="pv-bottom">
+      <div class="row nowrap pv-fmt"><div class="seg" id="pvFmt"><button data-f="jpeg">JPEG</button><button data-f="png">PNG</button></div><div id="pvQ" style="flex:1"></div></div>
+      <button class="big-btn primary" id="pvSave"><span data-icon="download"></span><span id="pvSaveLbl">Approve &amp; Save to phone</span></button>
+      <button class="big-btn" id="pvShare"><span data-icon="share"></span><span id="pvShareLbl">Approve &amp; Share to Drive / apps</span></button>
+      <button class="big-btn ghost" id="pvEdit"><span data-icon="back"></span>Back to edit</button>
+      <p class="note tip">To put photos in Google Drive: tap Share, then choose Drive. Nothing is saved until you approve.</p>
+    </div>
   </section>
 
   <div id="sheetBackdrop" class="backdrop"></div>

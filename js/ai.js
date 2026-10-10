@@ -45,16 +45,40 @@ function systemPrompt(ctx) {
 {"message": "<one short friendly sentence describing what you did>", "commands": [ {"op": "...", ...params} ]}
 Return ONLY that JSON. Use only these operations:
 ${JSON.stringify(OPS_SPEC)}
-Rules: commands run in order; keep text inside the image (use size ~0.06-0.12); put text at the top with position "top" unless told otherwise; prefer bold readable fonts with outline or shadow for legibility; if the request is unclear do the most reasonable thing; if nothing applies return an empty commands array and explain in message.
+Rules: commands run in order; the same commands may be applied to several photos, so prefer named positions over overlay indexes; keep text inside the image (use size ~0.06-0.12); put text at the top with position "top" unless told otherwise; prefer bold readable fonts with outline or shadow for legibility; if the request is unclear do the most reasonable thing; if nothing applies return an empty commands array and explain in message.
 Current editor state: ${JSON.stringify(ctx)}`;
 }
 
-function extractJSON(text) {
-  if (!text) throw new Error('Empty response from AI');
-  const t = text.replace(/^```(?:json)?/m, '').replace(/```\s*$/m, '');
-  const a = t.indexOf('{'), b = t.lastIndexOf('}');
-  if (a < 0 || b < a) throw new Error('AI did not return JSON');
-  return JSON.parse(t.slice(a, b + 1));
+// Robust JSON extraction: strips code fences / <think> blocks and tolerates text around the JSON.
+export function extractJSON(text) {
+  if (text && typeof text === 'object') return text;
+  if (!text || !String(text).trim()) throw new Error('The AI sent an empty reply.');
+  let t = String(text).replace(/<think>[\s\S]*?<\/think>/gi, '');
+  const fence = t.match(/```(?:json|JSON)?\s*([\s\S]*?)```/);
+  const candidates = [];
+  if (fence) candidates.push(fence[1]);
+  candidates.push(t);
+  for (const c of candidates) {
+    try { return normalize(JSON.parse(c.trim())); } catch (e) {}
+    // scan for balanced {...} or [...] blocks, string-aware
+    for (let start = 0; start < c.length; start++) {
+      const ch = c[start]; if (ch !== '{' && ch !== '[') continue;
+      let depth = 0, inStr = false, esc = false;
+      for (let i = start; i < c.length; i++) {
+        const x = c[i];
+        if (inStr) { if (esc) esc = false; else if (x === '\\') esc = true; else if (x === '"') inStr = false; continue; }
+        if (x === '"') inStr = true;
+        else if (x === '{' || x === '[') depth++;
+        else if (x === '}' || x === ']') { depth--; if (depth === 0) { try { return normalize(JSON.parse(c.slice(start, i + 1))); } catch (e) {} break; } }
+      }
+    }
+  }
+  throw new Error('The AI reply could not be understood (no valid JSON). Try again or rephrase.');
+}
+function normalize(j) {
+  if (Array.isArray(j)) return { message: '', commands: j };
+  if (j && !Array.isArray(j.commands)) j.commands = Array.isArray(j.steps) ? j.steps : Array.isArray(j.actions) ? j.actions : [];
+  return j;
 }
 
 async function post(url, key, body, signal) {
@@ -77,11 +101,15 @@ export async function plan(request, ctx, signal) {
     temperature: 0.2,
     response_format: { type: 'json_object' },
   };
+  if (/api\.x\.ai/.test(s.baseUrl)) body.reasoning_effort = 'low';
   let j;
-  try { j = await post(url, s.apiKey, body, signal); }
-  catch (e) {
-    if (e.status === 400 && /response_format|json/i.test(e.message)) { delete body.response_format; j = await post(url, s.apiKey, body, signal); }
-    else throw e;
+  for (let attempt = 0; ; attempt++) {
+    try { j = await post(url, s.apiKey, body, signal); break; }
+    catch (e) {
+      if (attempt < 2 && e.status === 400 && /reasoning/i.test(e.message) && body.reasoning_effort) { delete body.reasoning_effort; continue; }
+      if (attempt < 2 && e.status === 400 && /response_format|json/i.test(e.message) && body.response_format) { delete body.response_format; continue; }
+      throw new Error(friendlyError(e));
+    }
   }
   const out = extractJSON(j.choices?.[0]?.message?.content);
   if (!Array.isArray(out.commands)) out.commands = [];
@@ -102,10 +130,33 @@ export async function generateImage(prompt, signal) {
   throw new Error('No image returned');
 }
 
-export async function testConnection() {
-  const r = await plan('Make it a little brighter.', { image: { width: 1000, height: 800 }, currentOverlays: [] });
-  return r;
+// Turn HTTP / network failures into plain words.
+export function friendlyError(e) {
+  const st = e.status, m = e.message || '';
+  if (st === 401 || st === 403 || /incorrect api key|invalid api key|unauthorized/i.test(m))
+    return 'Your key was not accepted. Copy the whole API key from console.x.ai (it starts with "xai-"). Note: a SuperGrok subscription does not include API access.';
+  if (st === 402 || /credit|billing|quota|insufficient/i.test(m)) return 'Your API account has no credits left. Add credits at console.x.ai, then try again.';
+  if (st === 429) return 'Too many requests or out of credits. Wait a minute or check your balance at console.x.ai.';
+  if (st === 404 || /model.*(not found|does not exist)/i.test(m)) return 'That model name was not found. Use the default (grok-4.7) or check the model name.';
+  if (st >= 500) return 'The AI service is having trouble right now (' + st + '). Try again in a bit.';
+  if (!st) return 'Could not reach the AI service. Check your internet connection and the Base URL.';
+  return 'The AI service said: ' + m;
 }
+// Tiny request to check the key. Returns a plain-words result.
+export async function testKey(draft) {
+  const s = draft || loadSettings();
+  if (!s.apiKey) return { ok: false, message: 'Paste your API key first.' };
+  const url = (s.baseUrl || '').replace(/\/+$/, '') + '/chat/completions';
+  const body = { model: s.model, messages: [{ role: 'user', content: 'Reply with exactly: {"ok":true}' }], response_format: { type: 'json_object' } };
+  if (/api\.x\.ai/.test(s.baseUrl)) body.reasoning_effort = 'low';
+  try {
+    let j;
+    try { j = await post(url, s.apiKey, body); }
+    catch (e) { if (e.status === 400 && /reasoning|response_format/i.test(e.message)) { delete body.reasoning_effort; delete body.response_format; j = await post(url, s.apiKey, body); } else throw e; }
+    return { ok: true, message: `It works! Your key is valid and ${s.model} replied.` };
+  } catch (e) { return { ok: false, message: friendlyError(e) }; }
+}
+export async function testConnection() { const r = await testKey(); if (!r.ok) throw new Error(r.message); return r; }
 
 // Web Speech API dictation (Chrome/Android, Safari iOS 14.5+). Returns stop() or null if unsupported.
 export function dictate(onText, onEnd) {

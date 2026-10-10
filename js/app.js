@@ -158,9 +158,20 @@ document.addEventListener('click', (e) => {
   const act = a.dataset.act;
   if (act === 'camera') openCamera();
   else if (act === 'import' || act === 'importFromCam') { if (act === 'importFromCam') closeCamera(); $('#fileImport').click(); }
-  else if (act === 'saveAll' || act === 'shareAll') exportSheet(S.photos, 'batch');
+  else if (act === 'saveAll' || act === 'shareAll') openPreview(S.photos, 'gallery');
 });
 $('#btnAISettings').onclick = () => aiSettingsSheet();
+$('#btnHelp').onclick = () => helpSheet();
+function helpSheet() {
+  openSheet(`<h3>Phone gallery & Google Drive</h3>
+    <p class="note">Photo Studio works with your phone's own picker and share menu, so no Google sign-in is needed.</p>
+    <ul class="help-list">
+      <li><b>Pull photos in from Drive:</b> tap <b>Add photos</b>, then <b>Browse</b> / <b>Files</b> (Android) or <b>Choose File → Browse</b> (iPhone) and pick <b>Google Drive</b>.</li>
+      <li><b>Put photos into Drive:</b> tap <b>Save</b>, check the preview, then <b>Approve &amp; Share</b> and choose <b>Drive</b>. Dropbox, iCloud, OneDrive and messages work the same way.</li>
+      <li><b>Save to your phone gallery:</b> tap <b>Approve &amp; Save to phone</b>. On iPhone, choose <b>Save Image</b> in the menu that opens.</li>
+    </ul>
+    <div class="actions"><button class="big-btn primary" data-act="import" id="helpAdd">Add photos now</button></div>`, (sh) => { $('#helpAdd', sh).addEventListener('click', closeSheet); });
+}
 
 // ---------------- fabric editor ----------------
 let fc, bgImg;
@@ -273,6 +284,7 @@ const currentOverlays = () => fc.getObjects().map(o => o.toObject(PROPS));
 function snapshot() { return { edit: clone(S.cur.edit), overlays: currentOverlays() }; }
 function commit() {
   const p = S.cur; if (!p) return;
+  if (!S.aiRunning && S.aiProposal) hideAIBar();
   p.overlays = currentOverlays();
   p.hist = p.hist.slice(0, p.hi + 1);
   p.hist.push(snapshot());
@@ -294,7 +306,17 @@ async function restore(i) {
 $('#btnUndo').onclick = () => restore(S.cur.hi - 1);
 $('#btnRedo').onclick = () => restore(S.cur.hi + 1);
 
-async function openEditor(p) {
+function stashCurrent() {
+  const p = S.cur; if (!p || !fc) return;
+  if (S.mode !== 'select') setMode('select');
+  fc.discardActiveObject(); fc.renderAll();
+  try { const m = 360 / Math.max(fc.width, fc.height); p.thumb = fc.toCanvasElement(m).toDataURL('image/jpeg', 0.8); } catch (e) { console.warn(e); }
+  p.overlays = currentOverlays(); savePhoto(p, true);
+  p.prev = null;
+}
+async function openEditor(p, opts = {}) {
+  if (S.cur && S.cur !== p) stashCurrent();
+  if (S.cur !== p) hideAIBar();
   S.cur = p; S.cache = {}; S.mode = 'select';
   showScreen('editor');
   if (!fc) initFabric();
@@ -306,15 +328,11 @@ async function openEditor(p) {
     $('#edPos').textContent = S.photos.length > 1 ? `${S.photos.indexOf(p) + 1} / ${S.photos.length}` : '';
     selectTool(S.tool || 'adjust');
     layout(); await renderBase(); updateUndo();
-  } finally { busy(false); }
+  } finally { if (!opts.keepBusy) busy(false); }
 }
 async function closeEditor() {
-  const p = S.cur; if (!p) return;
-  if (S.mode !== 'select') setMode('select');
-  fc.discardActiveObject(); fc.renderAll();
-  try { const m = 360 / Math.max(fc.width, fc.height); p.thumb = fc.toCanvasElement(m).toDataURL('image/jpeg', 0.8); } catch (e) { console.warn(e); }
-  p.overlays = currentOverlays(); savePhoto(p, true);
-  p.prev = null;
+  if (!S.cur) return;
+  stashCurrent(); hideAIBar();
   S.cur = null; showScreen('gallery'); renderGallery();
 }
 $('#edBack').onclick = closeEditor;
@@ -675,6 +693,7 @@ const PANELS = {
       <button class="chip" id="mAll">${icon('copy')} Apply edits to all (${S.photos.length})</button></div>
       <div class="sec">AI Assistant ${key ? '<span class="tag">key saved on this device</span>' : '<span class="tag">optional</span>'}</div>
       ${key ? '' : '<p class="note">Say or type what you want and the assistant does the edits. It needs your own API key (xAI Grok or OpenAI) in AI settings. Everything else works without it.</p>'}
+      <div class="seg ai-target" id="aiTarget"><button data-t="one" class="${S.aiTarget !== 'all' ? 'on' : ''}">This photo</button><button data-t="all" class="${S.aiTarget === 'all' ? 'on' : ''}">All photos (${S.photos.length})</button></div>
       <textarea id="aiInput" rows="2" placeholder="e.g. remove the background, put a beach behind me and add the words Summer 2026 at the top"></textarea>
       <div class="row"><button class="chip primary" id="aiGo" ${key ? '' : 'disabled'}>${icon('send')} Do it</button>
       ${AI.speechSupported() ? `<button class="chip mic" id="aiMic">${icon('mic')} Speak</button>` : ''}
@@ -686,15 +705,17 @@ const PANELS = {
     $('#mAll', pn).onclick = () => applyToAllSheet();
     $('#aiSet', pn).onclick = () => aiSettingsSheet();
     ['Make it pop and add “Best Day Ever” at the bottom', 'Black and white, square crop', 'Blur the background', 'Warm sunset look with a ☀️ stamp top right'].forEach(x => {
-      const b = h(`<button class="chip"></button>`); b.textContent = x; b.onclick = () => { $('#aiInput').value = x; }; $('#aiEx', pn).appendChild(b);
+      const b = h(`<button class="chip"></button>`); b.textContent = x; b.onclick = () => { $('#aiInput').value = x; S.aiDraft = x; }; $('#aiEx', pn).appendChild(b);
     });
-    $('#aiGo', pn).onclick = () => runAssistant($('#aiInput').value.trim());
+    const ai = $('#aiInput', pn); ai.value = S.aiDraft || ''; ai.addEventListener('input', () => { S.aiDraft = ai.value; });
+    $$('#aiTarget button', pn).forEach(b => b.onclick = () => { S.aiTarget = b.dataset.t; $$('#aiTarget button', pn).forEach(x => x.classList.toggle('on', x === b)); });
+    $('#aiGo', pn).onclick = () => runAssistant($('#aiInput').value.trim(), S.aiTarget === 'all' ? 'all' : 'one');
     const mic = $('#aiMic', pn);
     if (mic) mic.onclick = () => {
       if (S.stopDictation) { S.stopDictation(); return; }
       mic.classList.add('on');
       try {
-        S.stopDictation = AI.dictate((txt) => { $('#aiInput').value = txt; }, (err) => { mic.classList.remove('on'); S.stopDictation = null; if (err && err !== 'no-speech' && err !== 'aborted') toast('Mic: ' + err); });
+        S.stopDictation = AI.dictate((txt) => { $('#aiInput').value = txt; S.aiDraft = txt; }, (err) => { mic.classList.remove('on'); S.stopDictation = null; if (err && err !== 'no-speech' && err !== 'aborted') toast('Mic: ' + err); });
       } catch (e) { mic.classList.remove('on'); toast('Dictation not available'); }
     };
     if (S.aiLast) showAIOut(S.aiLast.msg, S.aiLast.err);
@@ -876,19 +897,60 @@ function aiContext() {
     photosInSession: S.photos.length,
   };
 }
-async function runAssistant(req) {
+async function runAssistant(req, target = 'one') {
   if (!req) { toast('Type or say what you want'); return; }
   if (!AI.hasKey()) { aiSettingsSheet(); return; }
+  const home = S.cur;
+  const targets = target === 'all' ? S.photos.slice() : [home];
   busy(true, 'Asking the AI…');
+  const proposal = [], logs = [];
   try {
-    const plan = await AI.plan(req, aiContext());
+    const plan = await AI.plan(req, { ...aiContext(), target: target === 'all' ? `all ${targets.length} photos, same steps applied to each` : 'this photo only' });
     console.log('AI plan', plan);
-    busy(true, 'Applying edits…');
-    const log = await executeCommands(plan.commands || []);
-    showAIOut((plan.message || 'Done.') + (log.length ? '\n' + log.join('\n') : '') + '\n(Undo reverts all of it in one step.)');
+    if (!plan.commands.length) { showAIOut(plan.message || 'The AI had no edits to make for that request.'); return; }
+    S.aiRunning = true;
+    // current photo first, then the rest
+    const order = [home, ...targets.filter(p => p !== home)];
+    let i = 0;
+    for (const p of order) {
+      i++;
+      busy(true, targets.length > 1 ? `Applying AI edits to photo ${i} of ${targets.length}…` : 'Applying edits…');
+      if (S.cur !== p) await openEditor(p, { keepBusy: true });
+      proposal.push({ p, hi: p.hi });
+      const log = await executeCommands(plan.commands);
+      log.forEach(l => logs.push(targets.length > 1 ? `Photo ${S.photos.indexOf(p) + 1}: ${l.replace(/^• /, '')}` : l));
+    }
+    if (S.cur !== home) await openEditor(home, { keepBusy: true });
+    S.aiProposal = proposal;
+    showAIBar(proposal.length, plan.message);
+    showAIOut((plan.message || 'Done.') + (logs.length ? '\n' + logs.join('\n') : ''));
   } catch (e) { console.error(e); showAIOut('AI error: ' + e.message, true); }
-  finally { busy(false); }
+  finally { S.aiRunning = false; busy(false); }
 }
+function showAIBar(n, msg) {
+  $('#aiBarText').textContent = n > 1 ? `AI edited ${n} photos. Review, then keep or undo.` : 'AI made these changes. Review, then keep or undo.';
+  $('#aiBar').classList.add('on'); requestAnimationFrame(layout);
+}
+function hideAIBar() { S.aiProposal = null; $('#aiBar').classList.remove('on'); requestAnimationFrame(layout); }
+$('#aiKeep').onclick = () => { const n = S.aiProposal?.length || 1; hideAIBar(); toast(n > 1 ? `Kept AI edits on ${n} photos` : 'Kept. Everything stays editable'); };
+$('#aiUndo').onclick = async () => {
+  const prop = S.aiProposal; if (!prop) return;
+  busy(true, 'Undoing AI edits…');
+  try {
+    for (const { p, hi } of prop) {
+      if (p === S.cur) { await restore(hi); continue; }
+      const snap = p.hist[hi]; if (!snap) continue;
+      p.edit = clone(snap.edit); p.overlays = clone(snap.overlays); p.hi = hi; p.edited = hi > 0;
+      try { p.thumb = (await renderComposite(p, 360)).toDataURL('image/jpeg', 0.8); } catch (e) {}
+      p.prev = null; savePhoto(p, true);
+    }
+  } finally { busy(false); }
+  hideAIBar(); updateUndo(); toast(prop.length > 1 ? `Undid AI edits on ${prop.length} photos` : 'AI edits undone');
+};
+$('#aiManual').onclick = () => {
+  hideAIBar(); selectTool('layers');
+  toast('AI changes are normal edits: tap any text or stamp to move or change it, or use the tools');
+};
 async function executeCommands(cmds) {
   const p = S.cur, log = [];
   if (S.mode !== 'select') setMode('select');
@@ -958,31 +1020,50 @@ function aiSettingsSheet() {
   const s = AI.loadSettings();
   const esc = (v) => String(v || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
   openSheet(`<h3>AI settings <span class="tag">optional</span></h3>
-    <p class="note">The AI Assistant uses <b>your own</b> API key. It is stored only in this browser on this device (localStorage) and is sent only to the provider URL below, nowhere else. Leave it empty to use the app without AI. Usage is billed to your provider account.</p>
+    <p class="note">The AI Assistant is optional and uses <b>your own API key</b>. The key is stored only in this browser on this device and sent only to the address below.</p>
     <label class="fld">Provider</label>
-    <div class="seg" id="aiProv">${Object.entries(AI.PROVIDERS).map(([k, v]) => `<button data-p="${k}" class="${s.provider === k ? 'on' : ''}">${v.label.replace(' (OpenAI-compatible)', '')}</button>`).join('')}</div>
+    <div class="seg" id="aiProv">${Object.entries(AI.PROVIDERS).map(([k, v]) => `<button data-p="${k}" class="${s.provider === k ? 'on' : ''}">${k === 'custom' ? 'Other' : v.label}</button>`).join('')}</div>
+    <div class="note" id="aiProvNote"></div>
     <label class="fld" for="aiKey">API key (stored only on this device)</label>
-    <input type="password" id="aiKey" autocomplete="off" placeholder="paste your key, e.g. xai-…" value="${esc(s.apiKey)}">
-    <label class="fld" for="aiBase">Base URL (OpenAI-compatible /chat/completions)</label><input type="url" id="aiBase" value="${esc(s.baseUrl)}">
-    <label class="fld" for="aiModel">Chat model</label><input type="text" id="aiModel" value="${esc(s.model)}">
-    <label class="fld" for="aiImgModel">Image model for AI backgrounds (blank = off)</label><input type="text" id="aiImgModel" value="${esc(s.imageModel)}">
-    <label class="row"><input type="checkbox" id="aiImgOn" ${s.imageGen ? 'checked' : ''}> Allow generated backgrounds (text-to-image)</label>
-    <div class="warn">Only paste a key on your own device. Anyone using this browser could use it. “Forget key” removes it.</div>
-    <div class="actions"><button class="big-btn primary" id="aiSave">Save</button><button class="big-btn" id="aiTest">Save & test connection</button><button class="big-btn" id="aiForget">Forget key</button></div>
-    <div id="aiTestOut"></div>`, (sh) => {
+    <input type="password" id="aiKey" autocomplete="off" spellcheck="false" placeholder="paste your key, e.g. xai-…" value="${esc(s.apiKey)}">
+    <div class="row"><button class="chip primary" id="aiTest">Test key</button><button class="chip" id="aiShow">Show</button></div>
+    <div id="aiTestOut"></div>
+    <details id="aiAdv"><summary class="fld" style="cursor:pointer">Advanced (base URL, models)</summary>
+      <label class="fld" for="aiBase">Base URL (OpenAI-compatible)</label><input type="url" id="aiBase" value="${esc(s.baseUrl)}">
+      <label class="fld" for="aiModel">Chat model</label><input type="text" id="aiModel" value="${esc(s.model)}">
+      <label class="fld" for="aiImgModel">Image model for AI backgrounds (blank = off)</label><input type="text" id="aiImgModel" value="${esc(s.imageModel)}">
+      <label class="row"><input type="checkbox" id="aiImgOn" ${s.imageGen ? 'checked' : ''}> Allow generated backgrounds (text-to-image)</label>
+    </details>
+    <div class="warn">Only paste a key on your own phone. Anyone using this browser could use it. “Forget key” removes it.</div>
+    <div class="actions"><button class="big-btn primary" id="aiSave">Save</button><button class="big-btn" id="aiForget">Forget key</button></div>`, (sh) => {
     let prov = s.provider;
+    const note = () => {
+      $('#aiProvNote', sh).innerHTML = prov === 'xai'
+        ? 'Get an API key at <a href="https://console.x.ai" target="_blank" rel="noopener" style="color:#9cc0ff">console.x.ai</a> (API usage is billed there). <b>A SuperGrok subscription does not include API access</b>, so you need a separate API key with credits.'
+        : prov === 'openai' ? 'Get an API key at <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener" style="color:#9cc0ff">platform.openai.com</a>.'
+        : 'Any OpenAI-compatible service: set its Base URL and model under Advanced.';
+      $('#aiKey', sh).placeholder = prov === 'xai' ? 'paste your key, e.g. xai-…' : 'paste your API key';
+    };
+    note();
+    if (prov === 'custom') $('#aiAdv', sh).open = true;
     $$('#aiProv button', sh).forEach(b => b.onclick = () => {
       prov = b.dataset.p; $$('#aiProv button', sh).forEach(x => x.classList.toggle('on', x === b));
       const d = AI.PROVIDERS[prov]; $('#aiBase', sh).value = d.baseUrl; $('#aiModel', sh).value = d.model; $('#aiImgModel', sh).value = d.imageModel;
+      if (prov === 'custom') $('#aiAdv', sh).open = true;
+      note(); $('#aiTestOut', sh).innerHTML = '';
     });
-    const save = () => AI.saveSettings({ provider: prov, apiKey: $('#aiKey', sh).value.trim(), baseUrl: $('#aiBase', sh).value.trim(), model: $('#aiModel', sh).value.trim(), imageModel: $('#aiImgModel', sh).value.trim(), imageGen: $('#aiImgOn', sh).checked });
-    $('#aiSave', sh).onclick = () => { save(); closeSheet(); toast('AI settings saved on this device'); if (S.tool === 'ai') renderPanel(); };
-    $('#aiTest', sh).onclick = async () => {
-      save(); const o = $('#aiTestOut', sh); o.innerHTML = '<div class="ai-out">Testing…</div>';
-      try { const r = await AI.testConnection(); o.innerHTML = `<div class="ai-out">✓ Connected. The model planned ${r.commands?.length || 0} edit step(s).</div>`; if (S.tool === 'ai') renderPanel(); }
-      catch (e) { o.innerHTML = ''; const d = h('<div class="ai-out err"></div>'); d.textContent = '✗ ' + e.message; o.appendChild(d); }
+    const draft = () => ({ provider: prov, apiKey: $('#aiKey', sh).value.trim(), baseUrl: $('#aiBase', sh).value.trim(), model: $('#aiModel', sh).value.trim(), imageModel: $('#aiImgModel', sh).value.trim(), imageGen: $('#aiImgOn', sh).checked });
+    $('#aiShow', sh).onclick = (e) => { const k = $('#aiKey', sh); k.type = k.type === 'password' ? 'text' : 'password'; e.currentTarget.textContent = k.type === 'password' ? 'Show' : 'Hide'; };
+    $('#aiSave', sh).onclick = () => { AI.saveSettings(draft()); closeSheet(); toast('AI settings saved on this device'); if (S.tool === 'ai') renderPanel(); };
+    $('#aiTest', sh).onclick = async (e) => {
+      const btn = e.currentTarget, o = $('#aiTestOut', sh);
+      btn.disabled = true; o.innerHTML = '<div class="ai-out">Checking your key…</div>';
+      const r = await AI.testKey(draft());
+      btn.disabled = false;
+      o.innerHTML = ''; const d = h(`<div class="ai-out ${r.ok ? '' : 'err'}"></div>`); d.textContent = (r.ok ? '✓ ' : '✗ ') + r.message; o.appendChild(d);
+      if (r.ok) { AI.saveSettings(draft()); if (S.tool === 'ai') renderPanel(); }
     };
-    $('#aiForget', sh).onclick = () => { AI.clearKey(); $('#aiKey', sh).value = ''; toast('Key removed from this device'); if (S.tool === 'ai') renderPanel(); };
+    $('#aiForget', sh).onclick = () => { AI.clearKey(); $('#aiKey', sh).value = ''; $('#aiTestOut', sh).innerHTML = ''; toast('Key removed from this device'); if (S.tool === 'ai') renderPanel(); };
   });
 }
 
@@ -1038,36 +1119,88 @@ async function share(files, btn) {
     toast('Sharing not available here, downloading instead'); download(files); return true;
   }
 }
-function exportSheet(list, kind) {
-  if (!list.length) return;
-  if (S.cur && fc) { fc.discardActiveObject(); fc.requestRenderAll(); S.cur.overlays = currentOverlays(); }
-  const n = list.length, many = n > 1;
-  const shareOK = canShareFiles([new File([new Blob(['x'], { type: 'image/jpeg' })], 'x.jpg', { type: 'image/jpeg' })]);
-  openSheet(`<h3>${many ? `Save or share ${n} photos` : 'Save or share'}</h3>
-    <label class="fld">Format</label>
-    <div class="seg" id="exFmt"><button data-f="jpeg" class="${S.exp.format === 'jpeg' ? 'on' : ''}">JPEG</button><button data-f="png" class="${S.exp.format === 'png' ? 'on' : ''}">PNG (keeps transparency)</button></div>
-    <div id="exQ"></div>
-    <div class="actions">
-      <button class="big-btn primary" id="exSave">${icon('download')} ${isIOS && shareOK ? (many ? 'Save all to Photos' : 'Save to Photos') : (many ? `Save all ${n}` : 'Save to device')}</button>
-      ${shareOK ? `<button class="big-btn" id="exShare">${icon('share')} ${many ? 'Share all' : 'Share'} (Drive, iCloud, Dropbox…)</button>` : ''}
-      ${kind !== 'batch' && S.photos.length > 1 ? `<button class="big-btn" id="exAll">${icon('download')} Save / share all ${S.photos.length} photos</button>` : ''}
-    </div>
-    <p class="note">${isIOS ? 'On iPhone choose “Save Image” (Photos), “Save to Files”, or Google Drive in the share sheet.' : 'Share opens your phone’s share menu so you can send straight to Google Drive, Photos, Dropbox or any app.'} Exports use full resolution.</p>`, (sh) => {
-    const q = () => { const box = $('#exQ', sh); box.innerHTML = ''; if (S.exp.format === 'jpeg') box.appendChild(slider('Quality', Math.round(S.exp.quality * 100), 50, 100, v => { S.exp.quality = v / 100; persistExp(); })); };
-    q();
-    $$('#exFmt button', sh).forEach(b => b.onclick = () => { S.exp.format = b.dataset.f; $$('#exFmt button', sh).forEach(x => x.classList.toggle('on', x === b)); persistExp(); q(); });
-    $('#exSave', sh).onclick = async (ev) => {
-      const btn = ev.currentTarget; const files = await exportFiles(list);
-      if (isIOS && canShareFiles(files)) await share(files, btn); else { download(files); toast(many ? `Saving ${n} photos…` : 'Saved ✓'); }
-    };
-    const sb = $('#exShare', sh);
-    if (sb) sb.onclick = async (ev) => { const btn = ev.currentTarget; const files = await exportFiles(list); if (canShareFiles(files)) await share(files, btn); else download(files); };
-    const ab = $('#exAll', sh);
-    if (ab) ab.onclick = () => { closeSheet(); setTimeout(() => exportSheet(S.photos, 'batch'), 300); };
-  });
+// ---------------- preview & approve ----------------
+const PV = { items: [], idx: 0, from: 'gallery', busy: false };
+function pvRevoke() { PV.items.forEach(it => { URL.revokeObjectURL(it.url); URL.revokeObjectURL(it.beforeUrl); }); }
+async function pvRender() {
+  const list = PV.items.length ? PV.items.map(it => it.p) : PV.list;
+  const keep = new Map(PV.items.map(it => [it.p, it.on]));
+  const files = await exportFiles(list);
+  pvRevoke();
+  PV.items = list.map((p, i) => ({ p, file: files[i], url: URL.createObjectURL(files[i]), beforeUrl: URL.createObjectURL(p.blob), on: keep.has(p) ? keep.get(p) : true }));
 }
+async function openPreview(list, from) {
+  list = (list || []).filter(Boolean);
+  if (!list.length) return;
+  if (S.cur && fc) { fc.discardActiveObject(); fc.requestRenderAll(); S.cur.overlays = currentOverlays(); savePhoto(S.cur); }
+  PV.from = from; PV.list = list; PV.items = []; PV.idx = Math.max(0, list.indexOf(S.cur));
+  try { await pvRender(); } catch (e) { console.error(e); toast('Could not render: ' + e.message); return; }
+  showScreen('preview');
+  $('#pvTrack').classList.remove('show-before'); $('#pvBefore').setAttribute('aria-pressed', 'false');
+  pvBuild();
+  requestAnimationFrame(() => { const t = $('#pvTrack'); t.scrollLeft = PV.idx * t.clientWidth; });
+}
+function pvBuild() {
+  const t = $('#pvTrack'), many = PV.items.length > 1;
+  t.innerHTML = '';
+  PV.items.forEach((it, i) => {
+    const sl = h(`<div class="pv-slide ${it.on ? '' : 'off'}"><img class="after" alt="Final photo ${i + 1}"><img class="before" alt="Original photo ${i + 1}"><span class="pv-tag">After</span>
+      ${many ? `<label class="pv-inc"><input type="checkbox" ${it.on ? 'checked' : ''}> Include</label>` : ''}</div>`);
+    sl.querySelector('.after').src = it.url; sl.querySelector('.before').src = it.beforeUrl;
+    const cb = sl.querySelector('input');
+    if (cb) cb.onchange = () => { it.on = cb.checked; sl.classList.toggle('off', !it.on); pvStatus(); };
+    t.appendChild(sl);
+  });
+  $$('#pvFmt button').forEach(b => b.classList.toggle('on', b.dataset.f === S.exp.format));
+  pvQuality(); pvStatus();
+}
+function pvQuality() {
+  const box = $('#pvQ'); box.innerHTML = '';
+  if (S.exp.format === 'jpeg') box.appendChild(slider('Quality', Math.round(S.exp.quality * 100), 50, 100, v => { S.exp.quality = v / 100; persistExp(); }, () => pvReRender()));
+  else box.appendChild(h('<p class="note" style="margin:0">PNG keeps transparent backgrounds (bigger files).</p>'));
+}
+function pvSelected() { return PV.items.filter(it => it.on); }
+function pvStatus() {
+  const n = PV.items.length, k = pvSelected().length, many = n > 1;
+  $('#pvCount').textContent = many ? `${PV.idx + 1} of ${n} · ${k} selected · swipe` : `${PV.items[0].file.name} · ${(PV.items[0].file.size / 1048576).toFixed(1)} MB`;
+  $('#pvDots').innerHTML = many ? PV.items.map((it, i) => `<i class="${i === PV.idx ? 'on' : ''} ${it.on ? '' : 'off'}"></i>`).join('') : '';
+  const sfx = many ? ` (${k})` : '';
+  $('#pvSaveLbl').textContent = (isIOS && canShareFiles([PV.items[0].file]) ? 'Approve & Save to Photos' : 'Approve & Save to phone') + sfx;
+  $('#pvShareLbl').textContent = 'Approve & Share to Drive / apps' + sfx;
+  $('#pvSave').disabled = $('#pvShare').disabled = !k;
+  $('#pvShare').style.display = canShareFiles([PV.items[0].file]) ? '' : 'none';
+  $$('#pvTrack .pv-tag').forEach(tg => { tg.textContent = $('#pvTrack').classList.contains('show-before') ? 'Before' : 'After'; });
+}
+async function pvReRender() {
+  if (PV.busy) return; PV.busy = true;
+  try { await pvRender(); pvBuild(); requestAnimationFrame(() => { const t = $('#pvTrack'); t.scrollLeft = PV.idx * t.clientWidth; }); } finally { PV.busy = false; }
+}
+$('#pvTrack').addEventListener('scroll', () => { const t = $('#pvTrack'); const i = Math.round(t.scrollLeft / Math.max(1, t.clientWidth)); if (i !== PV.idx) { PV.idx = i; pvStatus(); } }, { passive: true });
+$('#pvBefore').onclick = () => { const t = $('#pvTrack'); const on = !t.classList.contains('show-before'); t.classList.toggle('show-before', on); $('#pvBefore').setAttribute('aria-pressed', String(on)); pvStatus(); };
+$$('#pvFmt button').forEach(b => b.onclick = () => { if (S.exp.format === b.dataset.f) return; S.exp.format = b.dataset.f; persistExp(); pvReRender(); });
+function closePreview(toEdit) {
+  const cur = PV.items[PV.idx]?.p;
+  pvRevoke(); PV.items = []; $('#pvTrack').innerHTML = '';
+  if (PV.from === 'editor' && S.cur) { showScreen('editor'); requestAnimationFrame(layout); if (toEdit && cur && cur !== S.cur) openEditor(cur); }
+  else if (toEdit && cur) openEditor(cur);
+  else { showScreen('gallery'); renderGallery(); }
+}
+$('#pvBack').onclick = () => closePreview(true);
+$('#pvEdit').onclick = () => closePreview(true);
+$('#pvSave').onclick = async (ev) => {
+  const files = pvSelected().map(i => i.file); if (!files.length) return;
+  S.lastApproved = files.map(f => f.name);
+  if (isIOS && canShareFiles(files)) { const ok = await share(files, ev.currentTarget); if (ok) toast('Choose “Save Image” to put it in Photos'); }
+  else { download(files); toast(files.length > 1 ? `Saving ${files.length} photos to your phone…` : 'Saved to your phone ✓'); }
+};
+$('#pvShare').onclick = async (ev) => {
+  const files = pvSelected().map(i => i.file); if (!files.length) return;
+  S.lastApproved = files.map(f => f.name);
+  if (canShareFiles(files)) await share(files, ev.currentTarget); else { download(files); }
+};
+
 function persistExp() { localStorage.setItem('photoapp.export', JSON.stringify(S.exp)); }
-$('#btnExport').onclick = () => exportSheet([S.cur], 'single');
+$('#btnExport').onclick = () => openPreview([S.cur], 'editor');
 
 // ---------------- boot ----------------
 async function boot() {
@@ -1083,4 +1216,4 @@ async function boot() {
   window.__ready = true;
 }
 boot();
-window.__app = { openEditor, closeEditor, addText, addEmoji, executeCommands, renderComposite, exportFiles, importFiles, selectTool, commit, restore, removeBg, magicAuto, applyToAll, get fc() { return fc; } };
+window.__app = { openPreview, runAssistant, openEditor, closeEditor, addText, addEmoji, executeCommands, renderComposite, exportFiles, importFiles, selectTool, commit, restore, removeBg, magicAuto, applyToAll, get fc() { return fc; } };

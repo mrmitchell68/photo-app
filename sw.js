@@ -1,5 +1,5 @@
 // Offline support: app shell is pre-cached; CDN assets (fonts, AI models) are cached the first time they're used.
-const VERSION = 'photo-studio-v1';
+const VERSION = 'photo-studio-v2';
 const SHELL = ['./', 'index.html', 'styles.css', 'manifest.webmanifest', 'vendor/fabric.min.js',
   'js/app.js', 'js/pipeline.js', 'js/store.js', 'js/ai.js', 'js/bgremove.js', 'js/icons.js', 'js/stamps.js',
   'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png'];
