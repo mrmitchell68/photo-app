@@ -19,5 +19,12 @@ The editor shows only the photo, the AI Assistant and the Magic buttons. The man
 ## Background removal
 Default engine for the Magic button, AI commands and batch: IMG.LY ISNet fp16 (about 80 MB, downloaded once and then cached by the service worker), with edge refinement (speck removal, small-hole fill, matte firming, light non-eroding feather). Fallbacks: the ISNet 8-bit model, then the MediaPipe people model if the precise model can't run.
 
+## Safety checks for background changes (v6)
+- Every subject mask is checked before use (coverage 2–98 %, not inverted, not noise, photo not blank). A bad mask is never applied; the photo stays as it was and a plain message explains why.
+- Removing the background and setting the new one happen in one step; the subject is always drawn on top.
+- AI replies from any provider are normalized first (nested `params`, `replaceBackground`, `background: "image prompt: …"`, setBackground before removeBackground, etc.). Commands can't delete or replace the photo; "reset everything" is ignored unless you asked for it.
+- If the phone runs out of canvas memory, rendering retries at a smaller size instead of producing a blank image.
+- **Report a problem** (AI settings or the help sheet) copies the last AI commands and mask stats to the clipboard. No API keys or photos are included.
+
 ## AI providers
 Free: Google Gemini (default), Groq. Paid: xAI Grok, OpenAI (gpt-6-luna), DeepSeek (deepseek-flash, thinking off), Claude (claude-haiku-5-5 via Anthropic's OpenAI-compatible endpoint with the browser-access header). Each provider keeps its own key in localStorage.

@@ -44,6 +44,14 @@ export function makeCanvas(w, h) {
 
 export function ctx2d(c) { return c.getContext('2d', { willReadFrequently: true }); }
 
+// Release a temporary canvas's backing store right away (iOS Safari caps total canvas memory).
+export function freeCanvas(c) { if (c && typeof HTMLCanvasElement !== 'undefined' && c instanceof HTMLCanvasElement) { c.width = 0; c.height = 0; } }
+// Cheap fingerprint (3 pixels) used to detect canvases whose contents were dropped by the browser.
+export function canvasSig(c) {
+  try { const g = c.getContext('2d', { willReadFrequently: true }); if (!g || !c.width) return 'x';
+    const pts = [[0, 0], [c.width >> 1, c.height >> 1], [c.width - 1, c.height - 1]];
+    return pts.map(([x, y]) => g.getImageData(x, y, 1, 1).data.join(',')).join('|'); } catch (e) { return 'x'; }
+}
 export function scaleToMax(src, maxSide) {
   const w = src.width, h = src.height;
   const k = Math.min(1, maxSide / Math.max(w, h));
@@ -379,16 +387,22 @@ export function composeBackground(src, bg, mask, assets) {
   sg.drawImage(src, 0, 0);
   sg.globalCompositeOperation = 'destination-in';
   sg.drawImage(mask, 0, 0, w, h);
+  // subject is always drawn last, above whatever background was painted
+  ctx.globalCompositeOperation = 'source-over';
   ctx.drawImage(subj, 0, 0);
+  freeCanvas(subj);
   return out;
 }
 
 // full render for a given source (already at desired resolution)
 export function render(src, edit, mask, assets, opts = {}) {
+  const tmp = [];
+  const step = (c, next) => { if (next !== c && c !== src) tmp.push(c); return next; };
   let c = applyHeal(src, edit.heal);
-  c = adjustCanvas(c, edit);
-  c = composeBackground(c, edit.bg, mask, assets);
-  c = applyGeometry(c, edit, opts.ignoreCrop);
+  c = step(c, adjustCanvas(c, edit));
+  c = step(c, composeBackground(c, edit.bg, mask, assets));
+  c = step(c, applyGeometry(c, edit, opts.ignoreCrop));
+  tmp.forEach(t => { if (t !== c) freeCanvas(t); });
   return c;
 }
 

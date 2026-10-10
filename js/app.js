@@ -1,9 +1,22 @@
 import * as P from './pipeline.js';
 import * as DB from './store.js';
 import * as AI from './ai.js';
-import { segment } from './bgremove.js';
+import { segment, lastRun as segRun } from './bgremove.js';
 import { icon, hydrateIcons } from './icons.js';
 import { EMOJI, SVG_STAMPS, svgUrl, emojiDataURL, FONTS, COLORS, GRADIENTS } from './stamps.js';
+
+// ---------------- tiny on-device debug log (no keys, no image data) ----------------
+const APP_VERSION = 'v6';
+const DBG_KEY = 'photoapp.debug.v1';
+const DBG = {
+  read() { try { return JSON.parse(localStorage.getItem(DBG_KEY) || '[]'); } catch (e) { return []; } },
+  push(kind, data) {
+    try { const l = DBG.read(); l.push({ t: new Date().toISOString(), kind, ...data }); while (l.length > 12) l.shift();
+      localStorage.setItem(DBG_KEY, JSON.stringify(l)); } catch (e) {}
+  },
+};
+window.addEventListener('error', (e) => DBG.push('error', { msg: String(e.message).slice(0, 300) }));
+window.addEventListener('unhandledrejection', (e) => DBG.push('error', { msg: String(e.reason?.message || e.reason).slice(0, 300) }));
 
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
@@ -65,18 +78,23 @@ function savePhoto(p, now) {
   if (now) doit(); else saveTimers[p.id] = setTimeout(doit, 600);
 }
 async function getPreview(p) {
-  if (!p.prev) { const img = await decodeBlob(p.blob); p.prev = P.scaleToMax(img, P.PREVIEW_MAX); }
+  if (p.prev && P.canvasSig(p.prev) !== p.prevSig) { DBG.push('canvas', { msg: 'preview canvas was cleared by the browser; rebuilt' }); p.prev = null; S.cache = {}; }
+  if (!p.prev) { const img = await decodeBlob(p.blob); p.prev = P.scaleToMax(img, P.PREVIEW_MAX); p.prevSig = P.canvasSig(p.prev); }
   return p.prev;
 }
 async function getFull(p) { const img = await decodeBlob(p.blob); return P.scaleToMax(img, P.FULL_MAX); }
 
 async function addAsset(blobOrCanvas, kind) {
   const id = kind + '-' + uid();
-  let blob = blobOrCanvas;
+  let blob = blobOrCanvas, img = null;
   if (blobOrCanvas instanceof HTMLCanvasElement) blob = await new Promise(r => blobOrCanvas.toBlob(r, 'image/png'));
-  const img = blobOrCanvas instanceof HTMLCanvasElement ? blobOrCanvas : await decodeBlob(blob);
+  // keep a decoded <img> (not the canvas): iOS Safari can discard canvas contents under memory pressure
+  if (blob) { try { img = await decodeBlob(blob); } catch (e) { img = null; } }
+  if (!img) img = blobOrCanvas instanceof HTMLCanvasElement ? blobOrCanvas : null;
+  if (!img) throw new Error('Could not store the image (out of memory?)');
+  if (img !== blobOrCanvas && blobOrCanvas instanceof HTMLCanvasElement) P.freeCanvas(blobOrCanvas);
   S.assets.set(id, { img, kind });
-  DB.put('assets', { id, blob, kind });
+  if (blob) DB.put('assets', { id, blob, kind });
   return id;
 }
 async function ensureAsset(id) {
@@ -167,6 +185,36 @@ document.addEventListener('click', (e) => {
 });
 $('#btnAISettings').onclick = () => aiSettingsSheet();
 $('#btnHelp').onclick = () => helpSheet();
+function debugReport() {
+  const st = AI.loadSettings();
+  const scrub = (t) => String(t).replace(/(sk-|gsk_|xai-|AIza)[A-Za-z0-9_\-]{6,}/g, '[key removed]');
+  const p = S.cur;
+  const info = {
+    app: 'Photo Studio ' + APP_VERSION, time: new Date().toISOString(), ua: navigator.userAgent,
+    screen: `${screen.width}x${screen.height}@${devicePixelRatio}`, memoryGB: navigator.deviceMemory || null,
+    provider: st.provider, model: st.model, imageGen: !!(st.imageGen && st.imageModel),
+    photo: p ? { w: p.w, h: p.h, bg: { mode: p.edit.bg.mode, hasMask: !!p.edit.bg.maskId, method: p.edit.bg.method } } : null,
+    lastMask: segRun, log: DBG.read(),
+  };
+  return scrub(JSON.stringify(info, null, 1));
+}
+async function reportProblem() {
+  const text = debugReport();
+  let copied = false;
+  try { await navigator.clipboard.writeText(text); copied = true; } catch (e) {}
+  openSheet(`<h3>Report a problem</h3>
+    <p class="note">${copied ? '<b>Copied to clipboard.</b> ' : ''}Paste this into a message to whoever helps you with the app. It lists the last AI steps and background-removal stats. It contains <b>no API keys and no photos</b>.</p>
+    <textarea id="dbgText" readonly style="width:100%;height:40vh;font:12px monospace">${text.replace(/&/g, '&amp;').replace(/</g, '&lt;')}</textarea>
+    <div class="actions"><button class="big-btn primary" id="dbgCopy">Copy</button>${navigator.share ? '<button class="big-btn" id="dbgShare">Share…</button>' : ''}</div>`, (sh) => {
+    $('#dbgCopy', sh).addEventListener('click', async () => {
+      const ta = $('#dbgText', sh); let ok = false;
+      try { await navigator.clipboard.writeText(ta.value); ok = true; } catch (e) { ta.removeAttribute('readonly'); ta.select(); ta.setSelectionRange(0, ta.value.length); try { ok = document.execCommand('copy'); } catch (e2) {} ta.setAttribute('readonly', ''); }
+      toast(ok ? 'Copied' : 'Select the text and copy it manually');
+    });
+    $('#dbgShare', sh)?.addEventListener('click', () => navigator.share({ title: 'Photo Studio problem report', text }).catch(() => {}));
+  });
+  if (copied) toast('Problem report copied (no keys)');
+}
 function helpSheet() {
   openSheet(`<h3>Phone gallery & Google Drive</h3>
     <p class="note">Photo Studio works with your phone's own picker and share menu, so no Google sign-in is needed.</p>
@@ -175,7 +223,7 @@ function helpSheet() {
       <li><b>Put photos into Drive:</b> tap <b>Save</b>, check the preview, then <b>Approve &amp; Share</b> and choose <b>Drive</b>. Dropbox, iCloud, OneDrive and messages work the same way.</li>
       <li><b>Save to your phone gallery:</b> tap <b>Approve &amp; Save to phone</b>. On iPhone, choose <b>Save Image</b> in the menu that opens.</li>
     </ul>
-    <div class="actions"><button class="big-btn primary" data-act="import" id="helpAdd">Add photos now</button></div>`, (sh) => { $('#helpAdd', sh).addEventListener('click', closeSheet); });
+    <div class="actions"><button class="big-btn primary" data-act="import" id="helpAdd">Add photos now</button><button class="big-btn" id="helpReport">Report a problem</button></div>`, (sh) => { $('#helpAdd', sh).addEventListener('click', closeSheet); $('#helpReport', sh).addEventListener('click', reportProblem); });
 }
 
 // ---------------- fabric editor ----------------
@@ -249,6 +297,7 @@ window.addEventListener('resize', () => layout());
 
 let renderQueued = false, rendering = false;
 function scheduleRender() { if (renderQueued) return; renderQueued = true; requestAnimationFrame(() => { renderQueued = false; renderBase(); }); }
+function renderBaseRetry() { setTimeout(() => { rendering = false; renderBase(); }, 0); }
 async function renderBase(original = false) {
   const p = S.cur; if (!p) return;
   if (rendering) { setTimeout(scheduleRender, 30); return; }
@@ -263,13 +312,17 @@ async function renderBase(original = false) {
       const hk = p.id + JSON.stringify(e.heal);
       if (C.hk !== hk) { C.hk = hk; C.healed = P.applyHeal(src, e.heal); C.ak = null; }
       const ak = hk + JSON.stringify([e.adj, e.filter, e.filterAmt, e.auto]);
-      if (C.ak !== ak) { C.ak = ak; C.adjusted = P.adjustCanvas(C.healed, e); }
-      out = P.composeBackground(C.adjusted, e.bg, maskOf(e), S.assets);
-      out = P.applyGeometry(out, e, S.mode === 'crop');
+      if (C.ak === ak && C.adjusted && P.canvasSig(C.adjusted) !== C.adjSig) { C.ak = null; C.hk = null; DBG.push('canvas', { msg: 'cached canvas cleared by the browser; rebuilt' }); return renderBaseRetry(); }
+      if (C.ak !== ak) { C.ak = ak; C.adjusted = P.adjustCanvas(C.healed, e); C.adjSig = P.canvasSig(C.adjusted); }
+      const composed = P.composeBackground(C.adjusted, e.bg, maskOf(e), S.assets);
+      out = P.applyGeometry(composed, e, S.mode === 'crop');
+      if (composed !== out && composed !== C.adjusted) P.freeCanvas(composed);
     }
+    const prevEl = bgImg && bgImg.getElement();
     const d = fullDims();
     if (!bgImg) bgImg = new fabric.Image(out, { left: 0, top: 0, originX: 'left', originY: 'top', selectable: false, evented: false, objectCaching: false });
     else bgImg.setElement(out);
+    if (prevEl && prevEl !== out && prevEl !== S.cache.adjusted && prevEl !== S.cache.healed && prevEl !== p.prev && !S.photos.some(q => q.prev === prevEl)) P.freeCanvas(prevEl);
     bgImg.set({ scaleX: d.w / out.width, scaleY: d.h / out.height, width: out.width, height: out.height });
     fc.backgroundImage = bgImg;
     fc.requestRenderAll();
@@ -828,24 +881,61 @@ async function magicAuto() {
   else { p.edit.auto = P.computeAutoLevels(await getPreview(p)); toast('Auto-enhanced ✨'); }
   await renderBase(); commit(); renderPanel();
 }
-async function computeMask(p, method) { return segment(await getPreview(p), method, (m) => busy(true, m)); }
+async function computeMask(p, method) {
+  try { const m = await segment(await getPreview(p), method, (msg) => busy(true, msg)); DBG.push('mask', { ok: true, ...segRun }); return m; }
+  catch (e) { DBG.push('mask', { ok: false, error: e.message, ...segRun }); throw e; }
+}
+const NO_SUBJECT_RE = /No person|No clear|Could not separate/;
+// Ensure the photo has a valid subject mask. Returns true when one is available; never changes the photo otherwise.
+async function ensureMask(p) {
+  const bg = p.edit.bg;
+  if (bg.maskId && bg.method === 'precise') { await ensureAsset(bg.maskId); if (maskOf(p.edit)) return true; }
+  const mask = await computeMask(p, 'precise');
+  const id = await addAsset(mask, 'mask');
+  p.edit.bg = { ...p.edit.bg, maskId: id, method: mask.method || 'precise' };
+  return true;
+}
+// Atomic background change: the mask is computed and validated first; only then is the new background applied.
+async function applyBackground(p, spec, log) {
+  const before = clone(p.edit.bg);
+  if (spec.type === 'none') { p.edit.bg = { ...before, mode: 'none' }; return true; }
+  try { await ensureMask(p); }
+  catch (e) {
+    p.edit.bg = before;
+    log?.push(NO_SUBJECT_RE.test(e.message) ? `• ${e.message}, so the background was left as it was.` : `• Background removal didn't work (${e.message}). The photo was left unchanged.`);
+    return false;
+  }
+  const bg = { ...p.edit.bg };
+  if (spec.type === 'color') { bg.mode = 'color'; bg.color = spec.color || '#ffffff'; }
+  else if (spec.type === 'gradient') { bg.mode = 'gradient'; bg.c1 = spec.color1 || '#4facfe'; bg.c2 = spec.color2 || '#00f2fe'; bg.angle = spec.angle ?? 180; }
+  else if (spec.type === 'blur') { bg.mode = 'blur'; bg.blur = Math.max(4, Math.min(80, +spec.blur || 30)); }
+  else if (spec.type === 'transparent') bg.mode = 'transparent';
+  else if (spec.type === 'generate') {
+    let ok = false;
+    if (AI.imageGenAvailable()) {
+      busy(true, 'Generating a background image…');
+      try {
+        const blob = await AI.generateImage(spec.prompt || 'beautiful scenic background, photorealistic, no people');
+        const img = await decodeBlob(blob);
+        bg.imageId = await addAsset(P.scaleToMax(img, 2400), 'bgimg'); bg.mode = 'image'; ok = true;
+        log?.push('• Generated a new background image.');
+      } catch (err) { log?.push('• Image generation failed (' + err.message + '), used a matching gradient instead.'); }
+    } else log?.push('• This AI provider can’t generate pictures, so a matching gradient was used.');
+    if (!ok) { bg.mode = 'gradient'; bg.c1 = spec.color1 || '#6ec6ff'; bg.c2 = spec.color2 || '#f5d9a6'; bg.angle = 180; }
+  } else { log?.push('• Unknown background type, left unchanged.'); return false; }
+  p.edit.bg = bg; // single assignment: mask + new background together
+  return true;
+}
 async function removeBg(method = 'precise', silent) {
   const p = S.cur;
   busy(true, 'Preparing background removal…');
   try {
-    const mask = await computeMask(p, method);
-    const id = await addAsset(mask, 'mask');
-    p.edit.bg.maskId = id; p.edit.bg.method = mask.method || method;
-    if (p.edit.bg.mode === 'none') p.edit.bg.mode = 'transparent';
+    const log = [];
+    const ok = await applyBackground(p, { type: 'transparent' }, log);
+    if (!ok) { const m = (log[0] || 'Background removal failed').replace(/^• /, ''); if (silent) throw new Error(m); toast(m, 5000); return false; }
     await renderBase();
     if (!silent) { commit(); if (!MANUAL) { toast('Background removed. Ask the AI for a new one, e.g. “sunset gradient behind”'); renderPanel(); } else { toast('Background removed. Pick a new one below'); if (S.tool !== 'bg') selectTool('bg'); else renderPanel(); } }
     return true;
-  } catch (e) {
-    (/No person|No clear|Could not separate/.test(e.message) ? console.warn : console.error)(e);
-    const msg = /No person|No clear|Could not separate/.test(e.message) ? e.message : `Background removal failed (${e.message || e}). The first use needs internet to download the model (about 80 MB).`;
-    toast(msg, 5000);
-    if (silent) throw e;
-    return false;
   } finally { busy(false); }
 }
 function applyToAllSheet() {
@@ -878,7 +968,7 @@ async function applyToAll(o) {
         else { const a = (sg.w * src.edit.crop.w) / (sg.h * src.edit.crop.h); let w = 1, hh = (g.w / a) / g.h; if (hh > 1) { hh = 1; w = (g.h * a) / g.w; } e.crop = { x: (1 - w) / 2, y: (1 - hh) / 2, w, h: hh }; }
       }
       if (o.bg) {
-        try { const mask = await computeMask(p, 'precise'); const id = await addAsset(mask, 'mask'); e.bg = { ...clone(src.edit.bg), maskId: id }; }
+        try { const mask = await computeMask(p, 'precise'); const id = await addAsset(mask, 'mask'); e.bg = { ...clone(src.edit.bg), maskId: id, method: mask.method || 'precise' }; }
         catch (err) { skipped.push(S.photos.indexOf(p) + 1); }
       }
       if (o.ov) {
@@ -914,6 +1004,8 @@ async function runAssistant(req, target = 'one') {
   try {
     const plan = await AI.plan(req, { ...aiContext(), target: target === 'all' ? `all ${targets.length} photos, same steps applied to each` : 'this photo only' });
     console.log('AI plan', plan);
+    DBG.push('ai', { request: req.slice(0, 300), target, provider: plan.provider, model: plan.model, message: plan.message, rawCommands: JSON.stringify(plan.rawCommands).slice(0, 2500), commands: JSON.stringify(plan.commands).slice(0, 2500), warnings: plan.warnings });
+    (plan.warnings || []).forEach(w => logs.push('• Note: ' + w));
     if (!plan.commands.length) { showAIOut(plan.message || 'The AI had no edits to make for that request.'); return; }
     S.aiRunning = true;
     // current photo first, then the rest
@@ -931,7 +1023,8 @@ async function runAssistant(req, target = 'one') {
     S.aiProposal = proposal;
     showAIBar(proposal.length, plan.message);
     showAIOut((plan.message || 'Done.') + (logs.length ? '\n' + logs.join('\n') : ''));
-  } catch (e) { console.error(e); showAIOut('AI error: ' + e.message, true); }
+    DBG.push('ai-result', { log: logs.slice(0, 20), bg: S.cur && { mode: S.cur.edit.bg.mode, hasMask: !!S.cur.edit.bg.maskId, method: S.cur.edit.bg.method } });
+  } catch (e) { console.error(e); DBG.push('ai-error', { request: req.slice(0, 300), error: e.message }); showAIOut('AI error: ' + e.message, true); }
   finally { S.aiRunning = false; busy(false); }
 }
 function showAIBar(n, msg) {
@@ -979,29 +1072,8 @@ async function executeCommands(cmds) {
           else if (c.w && c.h) { const x = Math.max(0, Math.min(0.95, +c.x || 0)), y = Math.max(0, Math.min(0.95, +c.y || 0)); setCrop({ x, y, w: Math.min(1 - x, +c.w), h: Math.min(1 - y, +c.h) }); }
           break;
         }
-        case 'removeBackground': if (!e().bg.maskId || e().bg.method !== 'precise' || c.method === 'precise') { await removeBg('precise', true); } if (e().bg.mode === 'none') e().bg.mode = 'transparent'; break;
-        case 'setBackground': {
-          if (c.type === 'none') { e().bg.mode = 'none'; break; }
-          if (!e().bg.maskId) await removeBg('precise', true);
-          const bg = e().bg;
-          if (c.type === 'color') { bg.mode = 'color'; bg.color = c.color || '#ffffff'; }
-          else if (c.type === 'gradient') { bg.mode = 'gradient'; bg.c1 = c.color1 || c.color || '#4facfe'; bg.c2 = c.color2 || '#00f2fe'; bg.angle = c.angle ?? 180; }
-          else if (c.type === 'blur') { bg.mode = 'blur'; bg.blur = Math.max(4, Math.min(80, +c.blur || 30)); }
-          else if (c.type === 'transparent') bg.mode = 'transparent';
-          else if (c.type === 'generate' || c.type === 'image') {
-            busy(true, 'Generating a background image…');
-            try {
-              const blob = await AI.generateImage(c.prompt || 'beautiful scenic background, photorealistic, no people');
-              const img = await decodeBlob(blob);
-              bg.imageId = await addAsset(P.scaleToMax(img, 2400), 'bgimg'); bg.mode = 'image';
-              log.push('• Generated a new background image.');
-            } catch (err) {
-              bg.mode = 'gradient'; bg.c1 = c.color1 || '#6ec6ff'; bg.c2 = c.color2 || '#f5d9a6'; bg.angle = 180;
-              log.push('• Image generation unavailable (' + err.message + '), used a matching gradient instead.');
-            }
-          }
-          break;
-        }
+        case 'removeBackground': await applyBackground(p, { type: 'transparent' }, log); break;
+        case 'setBackground': await applyBackground(p, c, log); break;
         case 'addText': if (c.text) await addText(String(c.text).slice(0, 200), { ...c, ai: true, silent: true }); break;
         case 'addStamp': if (c.emoji) await addEmoji(String(c.emoji), { position: c.position, size: Math.min(0.8, Math.max(0.03, +c.size || 0.2)), angle: c.angle, silent: true }); break;
         case 'updateObject': {
@@ -1014,10 +1086,10 @@ async function executeCommands(cmds) {
         }
         case 'deleteObject': { const o = fc.getObjects()[c.index]; if (o) fc.remove(o); break; }
         case 'clearOverlays': fc.getObjects().slice().forEach(o => fc.remove(o)); break;
-        case 'resetAll': p.edit = P.defaultEdit(); fc.getObjects().slice().forEach(o => fc.remove(o)); break;
+        case 'resetAll': { const keep = p.edit.bg; p.edit = P.defaultEdit(); if (keep.maskId) p.edit.bg = { ...p.edit.bg, maskId: keep.maskId, method: keep.method }; fc.getObjects().slice().forEach(o => fc.remove(o)); break; }
         default: log.push(`• Skipped unknown step “${c.op}”.`);
       }
-    } catch (err) { (/No person|No clear|Could not separate/.test(err.message) ? console.warn : console.error)(err); log.push(`• ${c.op} failed: ${err.message}`); }
+    } catch (err) { (NO_SUBJECT_RE.test(err.message) ? console.warn : console.error)(err); log.push(`• ${c.op} failed: ${err.message}`); }
   }
   layout(); await renderBase(); commit(); if (S.tool && S.tool !== 'ai') renderPanel();
   return log;
@@ -1044,7 +1116,9 @@ function aiSettingsSheet() {
       <label class="row"><input type="checkbox" id="aiImgOn"> Allow generated backgrounds (text-to-image)</label>
     </details>
     <div class="warn">Only paste a key on your own phone. Anyone using this browser could use it. “Forget key” removes it.</div>
-    <div class="actions"><button class="big-btn primary" id="aiSave">Use this provider</button><button class="big-btn" id="aiForget">Forget this key</button></div>`, (sh) => {
+    <div class="actions"><button class="big-btn primary" id="aiSave">Use this provider</button><button class="big-btn" id="aiForget">Forget this key</button></div>
+    <div class="actions"><button class="big-btn" id="aiReport">Report a problem</button></div>`, (sh) => {
+    $('#aiReport', sh).addEventListener('click', reportProblem);
     let prov = cur.provider;
     const fill = (id) => {
       const st = AI.loadSettings(id), P = AI.providerInfo(id);
@@ -1082,7 +1156,25 @@ function aiSettingsSheet() {
 }
 
 // ---------------- export ----------------
+function looksBlank(c) {
+  try {
+    const t = P.makeCanvas(32, 32), x = t.getContext('2d'); x.drawImage(c, 0, 0, 32, 32);
+    const d = x.getImageData(0, 0, 32, 32).data; let a = 0; for (let i = 3; i < d.length; i += 4) a += d[i];
+    P.freeCanvas(t); return a === 0;
+  } catch (e) { return true; }
+}
+// Renders the final image; if the browser runs out of canvas memory (blank result, common on iPhone), retries smaller.
 async function renderComposite(p, maxSide, jpeg) {
+  const sizes = [maxSide || null, 3072, 2048].filter((v, i, a) => i === 0 || (v < (maxSide || Infinity) && a.indexOf(v) === i));
+  let last;
+  for (const ms of sizes) {
+    try { const c = await renderCompositeOnce(p, ms, jpeg); if (!looksBlank(c)) return c; P.freeCanvas(c); last = new Error('render came out blank'); }
+    catch (e) { last = e; }
+    DBG.push('render', { msg: `render at ${ms || 'full'} failed: ${last.message}` });
+  }
+  throw new Error('Could not render the photo (the phone ran out of memory). Try closing other tabs.');
+}
+async function renderCompositeOnce(p, maxSide, jpeg) {
   if (S.cur === p && fc) p.overlays = currentOverlays();
   const src = maxSide ? P.scaleToMax(await getPreview(p), maxSide) : await getFull(p);
   await ensureAssets(p.edit);
@@ -1098,6 +1190,7 @@ async function renderComposite(p, maxSide, jpeg) {
   const out = P.makeCanvas(base.width, base.height);
   out.getContext('2d').drawImage(sc.getElement(), 0, 0);
   sc.dispose();
+  if (base !== src) P.freeCanvas(base);
   return out;
 }
 function fname(i, ext) { const d = new Date(), z = (n) => String(n).padStart(2, '0'); return `photo-${d.getFullYear()}${z(d.getMonth() + 1)}${z(d.getDate())}-${z(d.getHours())}${z(d.getMinutes())}${z(d.getSeconds())}${i != null ? '-' + (i + 1) : ''}.${ext}`; }
