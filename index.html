@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="theme-color" content="#0e0f13">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Photo Studio">
+<title>Photo Studio</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Lobster&family=Pacifico&family=Permanent+Marker&family=Playfair+Display:wght@700&family=Roboto:wght@400;900&display=swap">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div id="app">
+  <!-- GALLERY -->
+  <section id="gallery" class="screen active" aria-label="Photos">
+    <header class="topbar">
+      <h1>Photo Studio</h1>
+      <div class="spacer"></div>
+      <button class="icon-btn" id="btnAISettings" title="AI settings" aria-label="AI settings" data-icon="settings"></button>
+    </header>
+    <main class="gallery-main">
+      <div id="empty" class="empty">
+        <div class="empty-art">📸</div>
+        <h2>Let's make something</h2>
+        <p>Take one photo or a burst, or import from your gallery. Then edit each one, add stamps and words, and save or share.</p>
+        <div class="empty-actions">
+          <button class="big-btn primary" data-act="camera"><span data-icon="camera"></span>Take photos</button>
+          <button class="big-btn" data-act="import"><span data-icon="image"></span>Import photos</button>
+        </div>
+      </div>
+      <div id="grid" class="grid"></div>
+    </main>
+    <nav class="bottombar">
+      <button data-act="camera"><span data-icon="camera"></span>Camera</button>
+      <button data-act="import"><span data-icon="image"></span>Import</button>
+      <button data-act="saveAll" id="btnSaveAll"><span data-icon="download"></span>Save all</button>
+      <button data-act="shareAll" id="btnShareAll"><span data-icon="share"></span>Share all</button>
+    </nav>
+  </section>
+
+  <!-- CAMERA -->
+  <section id="camera" class="screen" aria-label="Camera">
+    <video id="video" playsinline autoplay muted></video>
+    <div class="flash" id="flash"></div>
+    <div class="cam-top">
+      <button class="icon-btn glass" id="camClose" aria-label="Close camera" data-icon="x"></button>
+      <div class="chips glass" id="burstChips">
+        <button data-burst="1" class="on">1</button><button data-burst="3">3</button><button data-burst="5">5</button><span class="chip-label">shots/tap</span>
+      </div>
+      <button class="icon-btn glass" id="camFlip" aria-label="Switch camera" data-icon="flip"></button>
+    </div>
+    <div class="cam-bottom">
+      <div class="strip" id="camStrip"></div>
+      <div class="cam-controls">
+        <button class="icon-btn glass" data-act="importFromCam" aria-label="Import" data-icon="image"></button>
+        <button class="shutter" id="shutter" aria-label="Take photo"><span></span></button>
+        <button class="done-btn" id="camDone">Done <b id="camCount"></b></button>
+      </div>
+    </div>
+  </section>
+
+  <!-- EDITOR -->
+  <section id="editor" class="screen" aria-label="Editor">
+    <header class="topbar">
+      <button class="icon-btn" id="edBack" aria-label="Back to photos" data-icon="back"></button>
+      <span class="ed-pos" id="edPos"></span>
+      <div class="spacer"></div>
+      <button class="icon-btn" id="btnUndo" aria-label="Undo" data-icon="undo"></button>
+      <button class="icon-btn" id="btnRedo" aria-label="Redo" data-icon="redo"></button>
+      <button class="pill-btn primary" id="btnExport"><span data-icon="download"></span>Save</button>
+    </header>
+    <div id="stage">
+      <div id="canvasWrap">
+        <canvas id="fc"></canvas>
+        <canvas id="brush"></canvas>
+        <div id="cropBox"><i data-h="nw"></i><i data-h="ne"></i><i data-h="sw"></i><i data-h="se"></i><div class="grid3"></div></div>
+      </div>
+      <button class="compare-btn" id="btnCompare" aria-label="Hold to compare">Hold to compare</button>
+    </div>
+    <div id="objbar" class="objbar">
+      <button data-obj="forward"><span data-icon="up"></span>Forward</button>
+      <button data-obj="backward"><span data-icon="down"></span>Back</button>
+      <button data-obj="duplicate"><span data-icon="copy"></span>Copy</button>
+      <button data-obj="edit" id="objEdit"><span data-icon="type"></span>Edit</button>
+      <button data-obj="delete" class="danger"><span data-icon="trash"></span>Delete</button>
+    </div>
+    <div id="panel" class="panel"></div>
+    <nav id="tools" class="tooltabs">
+      <button data-tool="ai"><span data-icon="sparkle"></span>AI</button>
+      <button data-tool="crop"><span data-icon="crop"></span>Crop</button>
+      <button data-tool="adjust"><span data-icon="sliders"></span>Adjust</button>
+      <button data-tool="filters"><span data-icon="filter"></span>Filters</button>
+      <button data-tool="clean"><span data-icon="wand"></span>Clean</button>
+      <button data-tool="bg"><span data-icon="layers2"></span>Background</button>
+      <button data-tool="stamps"><span data-icon="smile"></span>Stamps</button>
+      <button data-tool="text"><span data-icon="type"></span>Text</button>
+      <button data-tool="layers"><span data-icon="layers"></span>Layers</button>
+    </nav>
+  </section>
+
+  <div id="sheetBackdrop" class="backdrop"></div>
+  <div id="sheet" class="sheet" role="dialog"></div>
+  <div id="busy" class="busy"><div class="spinner"></div><div id="busyText">Working…</div></div>
+  <div id="toast" class="toast"></div>
+
+  <input type="file" id="fileImport" accept="image/*" multiple hidden>
+  <input type="file" id="fileCapture" accept="image/*" capture="environment" multiple hidden>
+  <input type="file" id="fileStamp" accept="image/*" hidden>
+  <input type="file" id="fileBgImage" accept="image/*" hidden>
+</div>
+<script src="vendor/fabric.min.js"></script>
+<script type="module" src="js/app.js"></script>
+</body>
+</html>
