@@ -12,6 +12,11 @@ const clone = (o) => JSON.parse(JSON.stringify(o));
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 const PROPS = ['kind', 'name', 'stampId'];
 
+// AI-only mode: manual editing tools are hidden from the UI. The code stays; restore it with the hidden flag
+// localStorage 'photoapp.manualTools' = '1' (or open the app once with ?manual=1; ?manual=0 turns it back off).
+try { const q = new URLSearchParams(location.search).get('manual'); if (q === '1' || q === '0') localStorage.setItem('photoapp.manualTools', q); } catch (e) {}
+const MANUAL = (() => { try { return localStorage.getItem('photoapp.manualTools') === '1'; } catch (e) { return false; } })();
+document.documentElement.classList.toggle('ai-only', !MANUAL);
 const S = {
   photos: [], cur: null, tool: null, mode: 'select', assets: new Map(),
   exp: JSON.parse(localStorage.getItem('photoapp.export') || '{"format":"jpeg","quality":0.92}'),
@@ -180,10 +185,12 @@ function initFabric() {
   if (fabric.Object.prototype.controls.mtr) fabric.Object.prototype.controls.mtr.offsetY = -36;
   fc = new fabric.Canvas('fc', { preserveObjectStacking: true, selection: false, allowTouchScrolling: false, uniformScaling: true, enableRetinaScaling: true, stopContextMenu: true });
   fc.on('object:modified', () => commit());
+  if (!MANUAL) fc.skipTargetFind = true;
   fc.on('selection:created', onSelect); fc.on('selection:updated', onSelect); fc.on('selection:cleared', onSelect);
   setupPinch();
 }
 function onSelect() {
+  if (!MANUAL && fc.getActiveObject()) { fc.discardActiveObject(); fc.requestRenderAll(); }
   const o = fc.getActiveObject();
   $('#objbar').classList.toggle('on', !!o && S.mode === 'select');
   $('#objEdit').style.display = o && o.kind === 'text' ? '' : 'none';
@@ -195,7 +202,7 @@ function setupPinch() {
   let g = null;
   const info = (t) => { const [a, b] = t; const dx = b.clientX - a.clientX, dy = b.clientY - a.clientY; return { d: Math.hypot(dx, dy), a: Math.atan2(dy, dx) * 180 / Math.PI }; };
   el.addEventListener('touchstart', (e) => {
-    if (e.touches.length !== 2 || S.mode !== 'select') return;
+    if (!MANUAL || e.touches.length !== 2 || S.mode !== 'select') return;
     let o = fc.getActiveObject();
     if (!o) {
       const r = fc.upperCanvasEl.getBoundingClientRect();
@@ -326,7 +333,7 @@ async function openEditor(p, opts = {}) {
     await setOverlays(p.overlays);
     if (!p.hist.length) { p.hist = [snapshot()]; p.hi = 0; }
     $('#edPos').textContent = S.photos.length > 1 ? `${S.photos.indexOf(p) + 1} / ${S.photos.length}` : '';
-    selectTool(S.tool || 'adjust');
+    selectTool(MANUAL ? (S.tool || 'adjust') : 'ai');
     layout(); await renderBase(); updateUndo();
   } finally { if (!opts.keepBusy) busy(false); }
 }
@@ -388,7 +395,7 @@ function setMode(m, cancel = false) {
     $('#cropBox').classList.add('on');
   } else fc.getObjects().forEach(o => { o.selectable = o.evented = true; });
   if (m === 'heal') { fc.discardActiveObject(); $('#brush').classList.add('on'); }
-  fc.skipTargetFind = m !== 'select';
+  fc.skipTargetFind = !MANUAL || m !== 'select';
   onSelect(); layout(); scheduleRender();
 }
 function positionCropBox() {
@@ -504,6 +511,7 @@ function aspectCrop(a) {
 // ---------------- tools & panels ----------------
 $('#tools').addEventListener('click', (e) => { const b = e.target.closest('[data-tool]'); if (b) selectTool(b.dataset.tool, true); });
 function selectTool(t, user) {
+  if (!MANUAL) t = 'ai', user = false; // AI-only: the AI panel is the only panel and stays open
   if (user && S.tool === t) S.tool = null; else S.tool = t;
   $$('#tools button').forEach(b => b.classList.toggle('on', b.dataset.tool === S.tool));
   if (S.tool !== 'crop' && S.mode === 'crop') setMode('select');
@@ -698,14 +706,14 @@ const PANELS = {
       <div class="row"><button class="chip primary" id="aiGo" ${key ? '' : 'disabled'}>${icon('send')} Do it</button>
       ${AI.speechSupported() ? `<button class="chip mic" id="aiMic">${icon('mic')} Speak</button>` : ''}
       <button class="chip" id="aiSet">${icon('settings')} AI settings</button></div>
-      <div class="hscroll" id="aiEx"></div>
+      <div class="sec ex-sec">Try one (tap to fill in)</div><div class="hscroll ex-row" id="aiEx"></div>
       <div id="aiOut"></div></div>`));
     $('#mAuto', pn).onclick = () => magicAuto();
     $('#mBg', pn).onclick = () => removeBg('quick');
     $('#mAll', pn).onclick = () => applyToAllSheet();
     $('#aiSet', pn).onclick = () => aiSettingsSheet();
-    ['Make it pop and add “Best Day Ever” at the bottom', 'Black and white, square crop', 'Blur the background', 'Warm sunset look with a ☀️ stamp top right'].forEach(x => {
-      const b = h(`<button class="chip"></button>`); b.textContent = x; b.onclick = () => { $('#aiInput').value = x; S.aiDraft = x; }; $('#aiEx', pn).appendChild(b);
+    ['Make it brighter and more colorful', 'Black and white, square crop', 'Blur the background', 'Warm sunset look with a ☀️ stamp top right', 'Add “Best Day Ever” at the bottom', 'Remove the background and put a soft blue gradient behind'].forEach(x => {
+      const b = h(`<button class="chip ex"></button>`); b.textContent = x; b.onclick = () => { $('#aiInput').value = x; S.aiDraft = x; if (!MANUAL) $('#aiInput').focus({ preventScroll: true }); }; $('#aiEx', pn).appendChild(b);
     });
     const ai = $('#aiInput', pn); ai.value = S.aiDraft || ''; ai.addEventListener('input', () => { S.aiDraft = ai.value; });
     $$('#aiTarget button', pn).forEach(b => b.onclick = () => { S.aiTarget = b.dataset.t; $$('#aiTarget button', pn).forEach(x => x.classList.toggle('on', x === b)); });
@@ -830,7 +838,7 @@ async function removeBg(method = 'quick', silent) {
     p.edit.bg.maskId = id; p.edit.bg.method = method;
     if (p.edit.bg.mode === 'none') p.edit.bg.mode = 'transparent';
     await renderBase();
-    if (!silent) { commit(); toast('Background removed. Pick a new one below'); if (S.tool !== 'bg') selectTool('bg'); else renderPanel(); }
+    if (!silent) { commit(); if (!MANUAL) { toast('Background removed. Ask the AI for a new one, e.g. “sunset gradient behind”'); renderPanel(); } else { toast('Background removed. Pick a new one below'); if (S.tool !== 'bg') selectTool('bg'); else renderPanel(); } }
     return true;
   } catch (e) {
     console.error(e);

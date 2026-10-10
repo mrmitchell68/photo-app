@@ -202,3 +202,10 @@ input[type=color]{flex:none;width:40px;height:40px;border:0;padding:0;background
 .tag.paid{background:#3d2a17;color:#ffcf8a}
 .prov-note{background:var(--bg3);border-radius:10px;padding:8px 10px}
 a.chip{text-decoration:none;color:var(--fg)}
+
+/* AI-only mode (manual tools hidden; code kept behind the photoapp.manualTools flag) */
+.ai-only #tools,.ai-only #objbar,.ai-only #aiManual{display:none!important}
+.ai-only #panel{max-height:46vh;padding-bottom:calc(10px + env(safe-area-inset-bottom))}
+.ai-only .upper-canvas{pointer-events:none}
+.ex-row .chip.ex{white-space:nowrap}
+.ai-only #panel .hscroll:has(#mAuto){flex-wrap:wrap;overflow:visible}

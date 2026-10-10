@@ -11,3 +11,7 @@ Mobile-first photo editor that runs entirely in the browser. No backend and no k
 * Installable PWA with offline support.
 
 Serve the folder over HTTPS (camera and share need it), e.g. GitHub Pages. Locally: `python3 -m http.server` then open http://localhost:8000.
+
+
+## AI-only mode (default)
+The editor shows only the photo, the AI Assistant and the Magic buttons. The manual tools (Crop, Adjust, Filters, Clean, Background, Stamps, Text, Layers, plus dragging objects) are still in the code. To bring them back on a device, open the app once with `?manual=1` (or set localStorage `photoapp.manualTools` to `1`). Use `?manual=0` to hide them again.
