@@ -12,10 +12,16 @@ export const PROVIDERS = {
     note: 'Free, no credit card: sign up at console.groq.com/keys and tap “Create API Key”. Free plan for this model: 30 requests/minute and 1,000 requests/day. No AI-generated backgrounds (gradients are used instead).' },
   xai: { label: 'xAI (Grok)', badge: 'Paid', baseUrl: 'https://api.x.ai/v1', model: 'grok-4.7', imageModel: 'grok-imagine-image-2.0',
     keyUrl: 'https://console.x.ai', keyHost: 'console.x.ai', keyHint: 'xai-…', reasoning: true,
-    note: 'Pay per use: get an API key at console.x.ai and add credits. A SuperGrok subscription does not include API access. Supports AI-generated backgrounds.' },
-  openai: { label: 'OpenAI', badge: 'Paid', baseUrl: 'https://api.openai.com/v1', model: 'gpt-4.1-mini', imageModel: 'gpt-image-1',
-    keyUrl: 'https://platform.openai.com/api-keys', keyHost: 'platform.openai.com', keyHint: 'sk-…', reasoning: false,
-    note: 'Pay per use: get an API key at platform.openai.com/api-keys. Supports AI-generated backgrounds.' },
+    note: 'Pay per use: get an API key at console.x.ai and add credits. A SuperGrok subscription does not include API access. About $7 per 1,000 AI requests with grok-4.7 (grok-4.3 is about half; change it under Advanced). AI backgrounds 4¢ each.' },
+  openai: { label: 'OpenAI', badge: 'Paid', baseUrl: 'https://api.openai.com/v1', model: 'gpt-6-luna', imageModel: 'gpt-image-1-mini',
+    keyUrl: 'https://platform.openai.com/api-keys', keyHost: 'platform.openai.com', keyHint: 'sk-…', reasoning: true,
+    note: 'Pay per use: get an API key at platform.openai.com/api-keys and add credit. About $0.45 per 1,000 AI requests with gpt-6-luna. AI backgrounds about 1–2¢ each (gpt-image-1-mini, medium quality).' },
+  deepseek: { label: 'DeepSeek', badge: 'Paid', baseUrl: 'https://api.deepseek.com', model: 'deepseek-flash', imageModel: '',
+    keyUrl: 'https://platform.deepseek.com/api_keys', keyHost: 'platform.deepseek.com', keyHint: 'sk-…', reasoning: false,
+    note: 'Very cheap pay per use: top up at platform.deepseek.com and create an API key. About $0.60–$1.20 per 1,000 AI requests. No AI-generated backgrounds (gradients are used instead).' },
+  anthropic: { label: 'Claude (Anthropic)', badge: 'Paid', baseUrl: 'https://api.anthropic.com/v1', model: 'claude-haiku-5-5', imageModel: '',
+    keyUrl: 'https://console.anthropic.com/settings/keys', keyHost: 'console.anthropic.com', keyHint: 'sk-ant-…', reasoning: false,
+    note: 'Pay per use: add credit and create a key at console.anthropic.com. About $0.45 per 1,000 AI requests with Claude Haiku 5.5. No AI-generated backgrounds (gradients are used instead).' },
   custom: { label: 'Other', badge: '', baseUrl: '', model: '', imageModel: '', keyUrl: '', keyHost: '', keyHint: '', reasoning: false,
     note: 'Any OpenAI-compatible service that allows browser requests: set its Base URL and model under Advanced.' },
 };
@@ -64,7 +70,7 @@ export const OPS_SPEC = {
     { op: 'flip', params: { axis: 'h|v' } },
     { op: 'crop', params: { aspect: 'original|1:1|4:5|3:4|9:16|16:9|4:3 (centered crop)', or: 'x,y,w,h normalized rect of the current uncropped image' } },
     { op: 'resetCrop' },
-    { op: 'removeBackground', params: { method: 'quick (people/selfies, default) | precise (any object, slower)' }, desc: 'Cuts out the subject. Needed before setBackground (it is run automatically if missing).' },
+    { op: 'removeBackground', params: {}, desc: 'Cuts out the main subject (people, pets, objects) with the precise on-device model. Needed before setBackground (it is run automatically if missing).' },
     { op: 'setBackground', params: { type: 'color|gradient|blur|transparent|none|generate', color: 'css color (color type)', color1: 'css color', color2: 'css color', angle: 'degrees for gradient, 90=left-to-right, 180=top-to-bottom', blur: '5..80 (blur type)', prompt: 'text-to-image description for generate type' }, desc: 'Replace the background behind the subject. Use "generate" with a prompt for a realistic scene ONLY when imageGeneration is true; otherwise approximate with a gradient using fitting colors (e.g. beach = sky blue to sand).' },
     { op: 'addText', params: { text: 'string', position: 'named or {x,y}', size: 'font size as fraction of image height, e.g. 0.08', font: 'Bebas Neue|Pacifico|Permanent Marker|Lobster|Playfair Display|Roboto|Impact|Georgia|Courier New', color: 'css color', outline: 'boolean', outlineColor: 'css color', shadow: 'boolean', bold: 'boolean', background: 'css color or null (label box)', angle: 'degrees' } },
     { op: 'addStamp', params: { emoji: 'a single emoji character, e.g. 😎 🌴 ❤️ ⭐', position: 'named or {x,y}', size: 'width as fraction of image width, e.g. 0.2', angle: 'degrees' } },
@@ -116,8 +122,15 @@ function normalize(j) {
   return j;
 }
 
+// Provider quirks keyed by URL so they also apply when set up via "Other".
+function extras(baseUrl) {
+  if (/api\.anthropic\.com/.test(baseUrl)) return { headers: { 'anthropic-dangerous-direct-browser-access': 'true' }, body: { max_tokens: 2048 } };
+  if (/api\.deepseek\.com/.test(baseUrl)) return { headers: {}, body: { thinking: { type: 'disabled' }, max_tokens: 2048 } };
+  return { headers: {}, body: {} };
+}
 async function post(url, key, body, signal) {
-  const r = await fetch(url, { method: 'POST', signal, headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` }, body: JSON.stringify(body) });
+  const x = extras(url);
+  const r = await fetch(url, { method: 'POST', signal, headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}`, ...x.headers }, body: JSON.stringify({ ...x.body, ...body }) });
   if (!r.ok) {
     let msg = `${r.status} ${r.statusText}`;
     try { let j = await r.json(); if (Array.isArray(j)) j = j[0] || {}; msg = j.error?.message || (typeof j.error === 'string' ? j.error : '') || j.message || j.detail || JSON.stringify(j).slice(0, 200); } catch (e) {}
@@ -138,10 +151,11 @@ export async function plan(request, ctx, signal) {
   };
   if (providerInfo(s.provider).reasoning) body.reasoning_effort = 'low';
   let j;
-  for (let attempt = 0; ; attempt++) {
+  for (let attempt = 0; attempt < 5; attempt++) {
     try { j = await post(url, s.apiKey, body, signal); break; }
     catch (e) {
       if (attempt < 2 && e.status === 400 && /reasoning/i.test(e.message) && body.reasoning_effort) { delete body.reasoning_effort; continue; }
+      if (attempt < 3 && e.status === 400 && /temperature/i.test(e.message) && 'temperature' in body) { delete body.temperature; continue; }
       if (attempt < 2 && e.status === 400 && /response_format|json/i.test(e.message) && body.response_format) { delete body.response_format; continue; }
       throw new Error(friendlyError(e, s));
     }
@@ -157,7 +171,7 @@ export async function generateImage(prompt, signal) {
   if (!imageGenAvailable(s)) throw new Error(providerInfo(s.provider).badge === 'Free' ? 'the free provider does not generate images' : 'image generation is off in AI settings');
   const url = s.baseUrl.replace(/\/+$/, '') + '/images/generations';
   const body = { model: s.imageModel, prompt, n: 1 };
-  if (s.provider !== 'openai') body.response_format = 'b64_json';
+  if (/api\.openai\.com/.test(s.baseUrl)) body.quality = 'medium'; else body.response_format = 'b64_json';
   const j = await post(url, s.apiKey, body, signal);
   const d = j.data?.[0];
   if (d?.b64_json) { const bin = atob(d.b64_json); const u = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i); return new Blob([u], { type: 'image/png' }); }
@@ -177,6 +191,7 @@ export function friendlyError(e, s = loadSettings()) {
   if (st === 404 || /model.*(not found|does not exist|not supported)/i.test(m)) return `The model "${s.model}" was not found. Tap the provider again to restore its default model.`;
   if (/location|region|country|not available in your/i.test(m)) return 'This provider is not available in your region. Try the other free provider.';
   if (st >= 500) return 'The AI service is having trouble right now (' + st + '). Try again in a bit.';
+  if (!st && /api\.openai\.com/.test(s.baseUrl || '')) return 'OpenAI did not answer. Usually this means the key was not accepted (OpenAI hides the reason from browsers) or there is no internet. Check the key at platform.openai.com/api-keys.';
   if (!st) return 'Could not reach the AI service. Check your internet connection and the Base URL.';
   return 'The AI service said: ' + m;
 }

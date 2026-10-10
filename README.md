@@ -15,3 +15,9 @@ Serve the folder over HTTPS (camera and share need it), e.g. GitHub Pages. Local
 
 ## AI-only mode (default)
 The editor shows only the photo, the AI Assistant and the Magic buttons. The manual tools (Crop, Adjust, Filters, Clean, Background, Stamps, Text, Layers, plus dragging objects) are still in the code. To bring them back on a device, open the app once with `?manual=1` (or set localStorage `photoapp.manualTools` to `1`). Use `?manual=0` to hide them again.
+
+## Background removal
+Default engine for the Magic button, AI commands and batch: IMG.LY ISNet fp16 (about 80 MB, downloaded once and then cached by the service worker), with edge refinement (speck removal, small-hole fill, matte firming, light non-eroding feather). Fallbacks: the ISNet 8-bit model, then the MediaPipe people model if the precise model can't run.
+
+## AI providers
+Free: Google Gemini (default), Groq. Paid: xAI Grok, OpenAI (gpt-6-luna), DeepSeek (deepseek-flash, thinking off), Claude (claude-haiku-5-5 via Anthropic's OpenAI-compatible endpoint with the browser-access header). Each provider keeps its own key in localStorage.

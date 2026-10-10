@@ -709,7 +709,7 @@ const PANELS = {
       <div class="sec ex-sec">Try one (tap to fill in)</div><div class="hscroll ex-row" id="aiEx"></div>
       <div id="aiOut"></div></div>`));
     $('#mAuto', pn).onclick = () => magicAuto();
-    $('#mBg', pn).onclick = () => removeBg('quick');
+    $('#mBg', pn).onclick = () => removeBg('precise');
     $('#mAll', pn).onclick = () => applyToAllSheet();
     $('#aiSet', pn).onclick = () => aiSettingsSheet();
     ['Make it brighter and more colorful', 'Black and white, square crop', 'Blur the background', 'Warm sunset look with a ☀️ stamp top right', 'Add “Best Day Ever” at the bottom', 'Remove the background and put a soft blue gradient behind'].forEach(x => {
@@ -829,21 +829,20 @@ async function magicAuto() {
   await renderBase(); commit(); renderPanel();
 }
 async function computeMask(p, method) { return segment(await getPreview(p), method, (m) => busy(true, m)); }
-async function removeBg(method = 'quick', silent) {
+async function removeBg(method = 'precise', silent) {
   const p = S.cur;
   busy(true, 'Preparing background removal…');
   try {
     const mask = await computeMask(p, method);
     const id = await addAsset(mask, 'mask');
-    p.edit.bg.maskId = id; p.edit.bg.method = method;
+    p.edit.bg.maskId = id; p.edit.bg.method = mask.method || method;
     if (p.edit.bg.mode === 'none') p.edit.bg.mode = 'transparent';
     await renderBase();
     if (!silent) { commit(); if (!MANUAL) { toast('Background removed. Ask the AI for a new one, e.g. “sunset gradient behind”'); renderPanel(); } else { toast('Background removed. Pick a new one below'); if (S.tool !== 'bg') selectTool('bg'); else renderPanel(); } }
     return true;
   } catch (e) {
-    console.error(e);
-    const other = method === 'quick' ? 'Precise' : 'Remove background';
-    const msg = /No person|No clear|Could not separate/.test(e.message) ? e.message : `Background removal failed (${e.message || e}). The first use needs internet to download the model; or try “${other}”.`;
+    (/No person|No clear|Could not separate/.test(e.message) ? console.warn : console.error)(e);
+    const msg = /No person|No clear|Could not separate/.test(e.message) ? e.message : `Background removal failed (${e.message || e}). The first use needs internet to download the model (about 80 MB).`;
     toast(msg, 5000);
     if (silent) throw e;
     return false;
@@ -879,7 +878,7 @@ async function applyToAll(o) {
         else { const a = (sg.w * src.edit.crop.w) / (sg.h * src.edit.crop.h); let w = 1, hh = (g.w / a) / g.h; if (hh > 1) { hh = 1; w = (g.h * a) / g.w; } e.crop = { x: (1 - w) / 2, y: (1 - hh) / 2, w, h: hh }; }
       }
       if (o.bg) {
-        try { const mask = await computeMask(p, src.edit.bg.method || 'quick'); const id = await addAsset(mask, 'mask'); e.bg = { ...clone(src.edit.bg), maskId: id }; }
+        try { const mask = await computeMask(p, 'precise'); const id = await addAsset(mask, 'mask'); e.bg = { ...clone(src.edit.bg), maskId: id }; }
         catch (err) { skipped.push(S.photos.indexOf(p) + 1); }
       }
       if (o.ov) {
@@ -980,10 +979,10 @@ async function executeCommands(cmds) {
           else if (c.w && c.h) { const x = Math.max(0, Math.min(0.95, +c.x || 0)), y = Math.max(0, Math.min(0.95, +c.y || 0)); setCrop({ x, y, w: Math.min(1 - x, +c.w), h: Math.min(1 - y, +c.h) }); }
           break;
         }
-        case 'removeBackground': if (!e().bg.maskId || c.method === 'precise') { await removeBg(c.method === 'precise' ? 'precise' : 'quick', true); } if (e().bg.mode === 'none') e().bg.mode = 'transparent'; break;
+        case 'removeBackground': if (!e().bg.maskId || e().bg.method !== 'precise' || c.method === 'precise') { await removeBg('precise', true); } if (e().bg.mode === 'none') e().bg.mode = 'transparent'; break;
         case 'setBackground': {
           if (c.type === 'none') { e().bg.mode = 'none'; break; }
-          if (!e().bg.maskId) await removeBg('quick', true);
+          if (!e().bg.maskId) await removeBg('precise', true);
           const bg = e().bg;
           if (c.type === 'color') { bg.mode = 'color'; bg.color = c.color || '#ffffff'; }
           else if (c.type === 'gradient') { bg.mode = 'gradient'; bg.c1 = c.color1 || c.color || '#4facfe'; bg.c2 = c.color2 || '#00f2fe'; bg.angle = c.angle ?? 180; }
@@ -1018,7 +1017,7 @@ async function executeCommands(cmds) {
         case 'resetAll': p.edit = P.defaultEdit(); fc.getObjects().slice().forEach(o => fc.remove(o)); break;
         default: log.push(`• Skipped unknown step “${c.op}”.`);
       }
-    } catch (err) { console.error(err); log.push(`• ${c.op} failed: ${err.message}`); }
+    } catch (err) { (/No person|No clear|Could not separate/.test(err.message) ? console.warn : console.error)(err); log.push(`• ${c.op} failed: ${err.message}`); }
   }
   layout(); await renderBase(); commit(); if (S.tool && S.tool !== 'ai') renderPanel();
   return log;
