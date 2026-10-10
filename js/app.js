@@ -691,8 +691,8 @@ const PANELS = {
       <div class="hscroll"><button class="chip ${S.cur.edit.auto ? 'on' : ''}" id="mAuto">${icon('wand')} Auto-enhance</button>
       <button class="chip" id="mBg">${icon('sparkle')} Remove background</button>
       <button class="chip" id="mAll">${icon('copy')} Apply edits to all (${S.photos.length})</button></div>
-      <div class="sec">AI Assistant ${key ? '<span class="tag">key saved on this device</span>' : '<span class="tag">optional</span>'}</div>
-      ${key ? '' : '<p class="note">Say or type what you want and the assistant does the edits. It needs your own API key (xAI Grok or OpenAI) in AI settings. Everything else works without it.</p>'}
+      <div class="sec">AI Assistant ${key ? `<span class="tag ${AI.providerInfo(AI.loadSettings().provider).badge === 'Free' ? 'free' : ''}">${AI.providerInfo(AI.loadSettings().provider).label} · ${AI.providerInfo(AI.loadSettings().provider).badge || 'custom'}</span>` : '<span class="tag">optional</span>'}</div>
+      ${key ? '' : '<p class="note">Say or type what you want and the assistant does the edits. It needs an API key: <b>Google Gemini</b> and <b>Groq</b> are free (no credit card). Tap AI settings to set one up. Everything else works without it.</p>'}
       <div class="seg ai-target" id="aiTarget"><button data-t="one" class="${S.aiTarget !== 'all' ? 'on' : ''}">This photo</button><button data-t="all" class="${S.aiTarget === 'all' ? 'on' : ''}">All photos (${S.photos.length})</button></div>
       <textarea id="aiInput" rows="2" placeholder="e.g. remove the background, put a beach behind me and add the words Summer 2026 at the top"></textarea>
       <div class="row"><button class="chip primary" id="aiGo" ${key ? '' : 'disabled'}>${icon('send')} Do it</button>
@@ -1017,53 +1017,60 @@ async function executeCommands(cmds) {
 }
 
 function aiSettingsSheet() {
-  const s = AI.loadSettings();
+  const cur = AI.loadSettings();
   const esc = (v) => String(v || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+  const cards = Object.entries(AI.PROVIDERS).map(([k, v]) => `<button class="prov ${cur.provider === k ? 'on' : ''}" data-p="${k}">
+      <span class="prov-name">${v.label}${k === AI.DEFAULT_PROVIDER ? ' <span class="tag free">Recommended</span>' : ''}</span>
+      <span class="tag ${v.badge === 'Free' ? 'free' : v.badge === 'Paid' ? 'paid' : ''}">${v.badge || 'Custom'}</span>${cur.provider === k ? '<span class="prov-active">In use</span>' : ''}</button>`).join('');
   openSheet(`<h3>AI settings <span class="tag">optional</span></h3>
-    <p class="note">The AI Assistant is optional and uses <b>your own API key</b>. The key is stored only in this browser on this device and sent only to the address below.</p>
-    <label class="fld">Provider</label>
-    <div class="seg" id="aiProv">${Object.entries(AI.PROVIDERS).map(([k, v]) => `<button data-p="${k}" class="${s.provider === k ? 'on' : ''}">${k === 'custom' ? 'Other' : v.label}</button>`).join('')}</div>
-    <div class="note" id="aiProvNote"></div>
-    <label class="fld" for="aiKey">API key (stored only on this device)</label>
-    <input type="password" id="aiKey" autocomplete="off" spellcheck="false" placeholder="paste your key, e.g. xai-…" value="${esc(s.apiKey)}">
-    <div class="row"><button class="chip primary" id="aiTest">Test key</button><button class="chip" id="aiShow">Show</button></div>
+    <p class="note">The AI Assistant is optional. It uses <b>your own key</b>, stored only in this browser and sent only to the provider you pick. <b>Google Gemini</b> and <b>Groq</b> have free tiers (no credit card).</p>
+    <div class="prov-list" id="aiProv">${cards}</div>
+    <div class="note prov-note" id="aiProvNote"></div>
+    <label class="fld" for="aiKey">API key for <span id="aiProvName"></span> (stored only on this device)</label>
+    <input type="password" id="aiKey" autocomplete="off" spellcheck="false">
+    <div class="row"><button class="chip primary" id="aiTest">Test key</button><button class="chip" id="aiShow">Show</button><a class="chip" id="aiGetKey" target="_blank" rel="noopener">Get a key ↗</a></div>
     <div id="aiTestOut"></div>
     <details id="aiAdv"><summary class="fld" style="cursor:pointer">Advanced (base URL, models)</summary>
-      <label class="fld" for="aiBase">Base URL (OpenAI-compatible)</label><input type="url" id="aiBase" value="${esc(s.baseUrl)}">
-      <label class="fld" for="aiModel">Chat model</label><input type="text" id="aiModel" value="${esc(s.model)}">
-      <label class="fld" for="aiImgModel">Image model for AI backgrounds (blank = off)</label><input type="text" id="aiImgModel" value="${esc(s.imageModel)}">
-      <label class="row"><input type="checkbox" id="aiImgOn" ${s.imageGen ? 'checked' : ''}> Allow generated backgrounds (text-to-image)</label>
+      <label class="fld" for="aiBase">Base URL (OpenAI-compatible)</label><input type="url" id="aiBase">
+      <label class="fld" for="aiModel">Chat model</label><input type="text" id="aiModel">
+      <label class="fld" for="aiImgModel">Image model for AI backgrounds (blank = off, gradients used)</label><input type="text" id="aiImgModel">
+      <label class="row"><input type="checkbox" id="aiImgOn"> Allow generated backgrounds (text-to-image)</label>
     </details>
     <div class="warn">Only paste a key on your own phone. Anyone using this browser could use it. “Forget key” removes it.</div>
-    <div class="actions"><button class="big-btn primary" id="aiSave">Save</button><button class="big-btn" id="aiForget">Forget key</button></div>`, (sh) => {
-    let prov = s.provider;
-    const note = () => {
-      $('#aiProvNote', sh).innerHTML = prov === 'xai'
-        ? 'Get an API key at <a href="https://console.x.ai" target="_blank" rel="noopener" style="color:#9cc0ff">console.x.ai</a> (API usage is billed there). <b>A SuperGrok subscription does not include API access</b>, so you need a separate API key with credits.'
-        : prov === 'openai' ? 'Get an API key at <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener" style="color:#9cc0ff">platform.openai.com</a>.'
-        : 'Any OpenAI-compatible service: set its Base URL and model under Advanced.';
-      $('#aiKey', sh).placeholder = prov === 'xai' ? 'paste your key, e.g. xai-…' : 'paste your API key';
+    <div class="actions"><button class="big-btn primary" id="aiSave">Use this provider</button><button class="big-btn" id="aiForget">Forget this key</button></div>`, (sh) => {
+    let prov = cur.provider;
+    const fill = (id) => {
+      const st = AI.loadSettings(id), P = AI.providerInfo(id);
+      $('#aiKey', sh).value = st.apiKey; $('#aiKey', sh).placeholder = P.keyHint ? `paste your key, e.g. ${P.keyHint}` : 'paste your API key';
+      $('#aiBase', sh).value = st.baseUrl; $('#aiModel', sh).value = st.model; $('#aiImgModel', sh).value = st.imageModel; $('#aiImgOn', sh).checked = !!st.imageGen;
+      $('#aiProvName', sh).textContent = P.label;
+      $('#aiProvNote', sh).textContent = P.note;
+      const gk = $('#aiGetKey', sh); gk.style.display = P.keyUrl ? '' : 'none'; gk.href = P.keyUrl || '#';
+      $('#aiAdv', sh).open = id === 'custom';
+      $('#aiSave', sh).textContent = id === st.active ? 'Save' : `Switch to ${P.label}`;
+      $('#aiTestOut', sh).innerHTML = '';
     };
-    note();
-    if (prov === 'custom') $('#aiAdv', sh).open = true;
-    $$('#aiProv button', sh).forEach(b => b.onclick = () => {
-      prov = b.dataset.p; $$('#aiProv button', sh).forEach(x => x.classList.toggle('on', x === b));
-      const d = AI.PROVIDERS[prov]; $('#aiBase', sh).value = d.baseUrl; $('#aiModel', sh).value = d.model; $('#aiImgModel', sh).value = d.imageModel;
-      if (prov === 'custom') $('#aiAdv', sh).open = true;
-      note(); $('#aiTestOut', sh).innerHTML = '';
-    });
+    fill(prov);
+    $$('#aiProv .prov', sh).forEach(b => b.onclick = () => { prov = b.dataset.p; $$('#aiProv .prov', sh).forEach(x => x.classList.toggle('on', x === b)); fill(prov); });
     const draft = () => ({ provider: prov, apiKey: $('#aiKey', sh).value.trim(), baseUrl: $('#aiBase', sh).value.trim(), model: $('#aiModel', sh).value.trim(), imageModel: $('#aiImgModel', sh).value.trim(), imageGen: $('#aiImgOn', sh).checked });
     $('#aiShow', sh).onclick = (e) => { const k = $('#aiKey', sh); k.type = k.type === 'password' ? 'text' : 'password'; e.currentTarget.textContent = k.type === 'password' ? 'Show' : 'Hide'; };
-    $('#aiSave', sh).onclick = () => { AI.saveSettings(draft()); closeSheet(); toast('AI settings saved on this device'); if (S.tool === 'ai') renderPanel(); };
+    $('#aiSave', sh).onclick = () => {
+      const d = draft(); AI.saveSettings(d, true); closeSheet();
+      toast(`AI Assistant now uses ${AI.providerInfo(prov).label}${d.apiKey ? '' : ' (add a key to use it)'}`);
+      if (S.tool === 'ai') renderPanel();
+    };
     $('#aiTest', sh).onclick = async (e) => {
       const btn = e.currentTarget, o = $('#aiTestOut', sh);
       btn.disabled = true; o.innerHTML = '<div class="ai-out">Checking your key…</div>';
       const r = await AI.testKey(draft());
       btn.disabled = false;
-      o.innerHTML = ''; const d = h(`<div class="ai-out ${r.ok ? '' : 'err'}"></div>`); d.textContent = (r.ok ? '✓ ' : '✗ ') + r.message; o.appendChild(d);
-      if (r.ok) { AI.saveSettings(draft()); if (S.tool === 'ai') renderPanel(); }
+      o.innerHTML = ''; const d = h(`<div class="ai-out ${r.ok ? '' : 'err'}"></div>`);
+      const active = AI.loadSettings().active;
+      d.textContent = (r.ok ? '✓ ' : '✗ ') + r.message + (r.ok && prov !== active ? ` Key saved. Tap “Switch to ${AI.providerInfo(prov).label}” to start using it.` : '');
+      o.appendChild(d);
+      if (r.ok) { AI.saveSettings(draft(), prov === active); if (S.tool === 'ai') renderPanel(); }
     };
-    $('#aiForget', sh).onclick = () => { AI.clearKey(); $('#aiKey', sh).value = ''; $('#aiTestOut', sh).innerHTML = ''; toast('Key removed from this device'); if (S.tool === 'ai') renderPanel(); };
+    $('#aiForget', sh).onclick = () => { AI.clearKey(prov); $('#aiKey', sh).value = ''; $('#aiTestOut', sh).innerHTML = ''; toast(`${AI.providerInfo(prov).label} key removed from this device`); if (S.tool === 'ai') renderPanel(); };
   });
 }
 

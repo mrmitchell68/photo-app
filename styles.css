@@ -192,3 +192,13 @@ input[type=color]{flex:none;width:40px;height:40px;border:0;padding:0;background
 #pvBefore[aria-pressed=true]{background:#fff;color:#000}
 .help-list{margin:8px 0;padding-left:20px}.help-list li{margin:6px 0}
 .ai-target{margin:4px 0 8px}
+
+.prov-list{display:flex;flex-direction:column;gap:6px;margin:8px 0}
+.prov{display:flex;align-items:center;gap:8px;min-height:48px;padding:8px 12px;border-radius:12px;background:var(--bg3);border:2px solid transparent;text-align:left}
+.prov.on{border-color:var(--acc);background:#1d2a45}
+.prov-name{flex:1;font-weight:600}
+.prov-active{font-size:11px;color:#8ff0a4;margin-left:4px}
+.tag.free{background:#173d26;color:#8ff0a4}
+.tag.paid{background:#3d2a17;color:#ffcf8a}
+.prov-note{background:var(--bg3);border-radius:10px;padding:8px 10px}
+a.chip{text-decoration:none;color:var(--fg)}
