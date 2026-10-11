@@ -183,13 +183,22 @@ export async function segment(canvas, method = 'precise', progress) {
     if (method === 'quick') m = await quick(src, progress);
     else {
       try { m = await precise(src, progress); }
-      catch (e) { used = 'quick'; progress?.('Precise model unavailable, using the quick people model…'); m = await quick(src, progress); }
+      catch (e) {
+        note('precise unavailable; refusing people-only fallback for product safety');
+        const err = new Error('Precise background removal is unavailable. Your original product photo was kept unchanged. Please retry when the model can load.');
+        err.code = 'PRECISE_UNAVAILABLE';
+        err.cause = e;
+        throw err;
+      }
     }
   } finally { if (src !== canvas) freeCanvas(src); }
   const raw = maskStats(m, canvas);
   progress?.('Cleaning up the edges…');
   const keep = cloneMask(m);
-  refineMask(m);
+  // Product-safe mode: keep the precise model's original alpha matte.
+  // Generic component cleanup can erase detached product details or fill real holes.
+  // The original image remains untouched; only the background mask is used.
+  if (used !== 'precise') refineMask(m);
   let st = maskStats(m, canvas);
   if (raw.ok && (!st.ok || st.coverage < raw.coverage * 0.7)) { note('refinement discarded (would remove too much)'); freeCanvas(m); m = keep; st = raw; } else freeCanvas(keep);
   Object.assign(lastRun, { method: used, model: m.model || (used === 'quick' ? 'mediapipe' : ''), raw, final: st, size: `${m.width}x${m.height}`, ms: Math.round(performance.now() - t0) });
